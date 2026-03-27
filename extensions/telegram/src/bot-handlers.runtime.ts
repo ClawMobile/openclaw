@@ -66,6 +66,7 @@ import {
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { logTelegramBenchmarkEvent } from "./benchmark-log.js";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
@@ -1629,6 +1630,19 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }
+      const updateId =
+        (event.ctxForDedupe as { update?: { update_id?: number } }).update?.update_id ?? undefined;
+      logTelegramBenchmarkEvent("inbound_received", {
+        accountId,
+        updateId,
+        chatId: event.chatId,
+        messageId: event.msg.message_id,
+        senderId: event.senderId || undefined,
+        senderUsername: event.senderUsername || undefined,
+        isGroup: event.isGroup,
+        isForum: event.isForum,
+        threadId: event.messageThreadId,
+      });
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,
         isGroup: event.isGroup,

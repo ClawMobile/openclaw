@@ -3,6 +3,7 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { logTelegramBenchmarkEvent } from "../telegram/benchmark-log.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -84,6 +85,19 @@ async function recordLoopOutcome(args: {
   } catch (err) {
     log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
   }
+}
+
+function summarizeToolResult(result: unknown): Record<string, unknown> {
+  if (!result || typeof result !== "object") {
+    return { resultType: typeof result };
+  }
+  const record = result as Record<string, unknown>;
+  return {
+    resultType: Array.isArray(result) ? "array" : "object",
+    resultStatus: typeof record.status === "string" ? record.status : undefined,
+    ok: typeof record.ok === "boolean" ? record.ok : undefined,
+    error: typeof record.error === "string" ? record.error : undefined,
+  };
 }
 
 export async function runBeforeToolCallHook(args: {
@@ -210,6 +224,15 @@ export function wrapToolWithBeforeToolCallHook(
         ctx,
       });
       if (outcome.blocked) {
+        logTelegramBenchmarkEvent("tool_blocked", {
+          agentId: ctx?.agentId,
+          sessionKey: ctx?.sessionKey,
+          sessionId: ctx?.sessionId,
+          runId: ctx?.runId,
+          toolName: normalizeToolName(toolName || "tool"),
+          toolCallId,
+          reason: outcome.reason,
+        });
         throw new Error(outcome.reason);
       }
       if (toolCallId) {
@@ -223,8 +246,25 @@ export function wrapToolWithBeforeToolCallHook(
         }
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
+      logTelegramBenchmarkEvent("tool_started", {
+        agentId: ctx?.agentId,
+        sessionKey: ctx?.sessionKey,
+        sessionId: ctx?.sessionId,
+        runId: ctx?.runId,
+        toolName: normalizedToolName,
+        toolCallId,
+      });
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        logTelegramBenchmarkEvent("tool_finished", {
+          agentId: ctx?.agentId,
+          sessionKey: ctx?.sessionKey,
+          sessionId: ctx?.sessionId,
+          runId: ctx?.runId,
+          toolName: normalizedToolName,
+          toolCallId,
+          ...summarizeToolResult(result),
+        });
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
@@ -234,6 +274,15 @@ export function wrapToolWithBeforeToolCallHook(
         });
         return result;
       } catch (err) {
+        logTelegramBenchmarkEvent("tool_failed", {
+          agentId: ctx?.agentId,
+          sessionKey: ctx?.sessionKey,
+          sessionId: ctx?.sessionId,
+          runId: ctx?.runId,
+          toolName: normalizedToolName,
+          toolCallId,
+          error: String((err as Error)?.message || err),
+        });
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,

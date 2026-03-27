@@ -5,6 +5,7 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
+import { logTelegramBenchmarkEvent } from "../telegram/benchmark-log.js";
 import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
@@ -58,6 +59,34 @@ function describeToolExecutionError(err: unknown): {
     return { message, stack: err.stack };
   }
   return { message: String(err) };
+}
+
+function summarizeToolResult(result: unknown): Record<string, unknown> {
+  if (!result || typeof result !== "object") {
+    return { resultType: typeof result };
+  }
+  const record = result as Record<string, unknown>;
+  return {
+    resultType: Array.isArray(result) ? "array" : "object",
+    resultStatus: typeof record.status === "string" ? record.status : undefined,
+    ok: typeof record.ok === "boolean" ? record.ok : undefined,
+    error: typeof record.error === "string" ? record.error : undefined,
+  };
+}
+
+function stringifyToolPayload(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  try {
+    const encoded = JSON.stringify(payload, null, 2);
+    if (typeof encoded === "string") {
+      return encoded;
+    }
+  } catch {
+    // Fall through to String(payload) for non-serializable values.
+  }
+  return String(payload);
 }
 
 function normalizeToolExecutionResult(params: {
@@ -135,17 +164,40 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               toolCallId,
             });
             if (hookOutcome.blocked) {
+              logTelegramBenchmarkEvent("tool_blocked", {
+                toolName: normalizedName,
+                toolCallId,
+                reason: hookOutcome.reason,
+              });
               throw new Error(hookOutcome.reason);
             }
             executeParams = hookOutcome.params;
+            logTelegramBenchmarkEvent("tool_started", {
+              toolName: normalizedName,
+              toolCallId,
+            });
           }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
           });
+          if (!beforeHookWrapped) {
+            logTelegramBenchmarkEvent("tool_finished", {
+              toolName: normalizedName,
+              toolCallId,
+              ...summarizeToolResult(result),
+            });
+          }
           return result;
         } catch (err) {
+          if (!beforeHookWrapped) {
+            logTelegramBenchmarkEvent("tool_failed", {
+              toolName: normalizedName,
+              toolCallId,
+              error: String((err as Error)?.message || err),
+            });
+          }
           if (signal?.aborted) {
             throw err;
           }
@@ -195,8 +247,26 @@ export function toClientToolDefinitions(
           ctx: hookContext,
         });
         if (outcome.blocked) {
+          logTelegramBenchmarkEvent("tool_blocked", {
+            agentId: hookContext?.agentId,
+            sessionKey: hookContext?.sessionKey,
+            sessionId: hookContext?.sessionId,
+            runId: hookContext?.runId,
+            toolName: normalizeToolName(func.name),
+            toolCallId,
+            reason: outcome.reason,
+          });
           throw new Error(outcome.reason);
         }
+        logTelegramBenchmarkEvent("tool_started", {
+          agentId: hookContext?.agentId,
+          sessionKey: hookContext?.sessionKey,
+          sessionId: hookContext?.sessionId,
+          runId: hookContext?.runId,
+          toolName: normalizeToolName(func.name),
+          toolCallId,
+          delegated: true,
+        });
         const adjustedParams = outcome.params;
         const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
         // Notify handler that a client tool was called
@@ -204,11 +274,22 @@ export function toClientToolDefinitions(
           onClientToolCall(func.name, paramsRecord);
         }
         // Return a pending result - the client will execute this tool
-        return jsonResult({
+        const result = jsonResult({
           status: "pending",
           tool: func.name,
           message: "Tool execution delegated to client",
         });
+        logTelegramBenchmarkEvent("tool_finished", {
+          agentId: hookContext?.agentId,
+          sessionKey: hookContext?.sessionKey,
+          sessionId: hookContext?.sessionId,
+          runId: hookContext?.runId,
+          toolName: normalizeToolName(func.name),
+          toolCallId,
+          delegated: true,
+          ...summarizeToolResult(result),
+        });
+        return result;
       },
     } satisfies ToolDefinition;
   });

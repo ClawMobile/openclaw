@@ -12,12 +12,26 @@ HASH_FILE="$ROOT_DIR/src/canvas-host/a2ui/.bundle.hash"
 OUTPUT_FILE="$ROOT_DIR/src/canvas-host/a2ui/a2ui.bundle.js"
 A2UI_RENDERER_DIR="$ROOT_DIR/vendor/a2ui/renderers/lit"
 A2UI_APP_DIR="$ROOT_DIR/apps/shared/OpenClawKit/Tools/CanvasA2UI"
+SKIP_MISSING="${OPENCLAW_A2UI_SKIP_MISSING:-0}"
 
 # Docker builds exclude vendor/apps via .dockerignore.
 # In that environment we can keep a prebuilt bundle only if it exists.
 if [[ ! -d "$A2UI_RENDERER_DIR" || ! -d "$A2UI_APP_DIR" ]]; then
   if [[ -f "$OUTPUT_FILE" ]]; then
     echo "A2UI sources missing; keeping prebuilt bundle."
+    exit 0
+  fi
+  if [[ "$SKIP_MISSING" == "1" ]]; then
+    echo "A2UI sources missing; OPENCLAW_A2UI_SKIP_MISSING=1 so creating placeholder bundle."
+    mkdir -p "$(dirname "$OUTPUT_FILE")"
+    cat > "$OUTPUT_FILE" <<'EOF'
+/*
+ * Placeholder A2UI bundle generated because source assets are unavailable.
+ * Set OPENCLAW_A2UI_SKIP_MISSING=0 and re-run pnpm canvas:a2ui:bundle when
+ * vendor/apps A2UI sources are present.
+ */
+globalThis.__OPENCLAW_A2UI_PLACEHOLDER__ = true;
+EOF
     exit 0
   fi
   echo "A2UI sources missing and no prebuilt bundle found at: $OUTPUT_FILE" >&2

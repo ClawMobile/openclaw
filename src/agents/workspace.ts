@@ -101,6 +101,26 @@ function stripFrontMatter(content: string): string {
   return trimmed;
 }
 
+function buildTemplateNameCandidates(name: string): string[] {
+  const candidates = [name];
+  if (name.endsWith(".md")) {
+    candidates.push(name.replace(/\.md$/, ".dev.md"));
+  }
+  if (name === DEFAULT_BOOTSTRAP_FILENAME) {
+    candidates.push("BOOT.md", "BOOT.dev.md");
+  }
+  return [...new Set(candidates)];
+}
+
+function buildTemplateDirCandidates(templateDir: string): string[] {
+  const candidates = [templateDir];
+  const localizedDir = path.resolve(templateDir, "..", "..", "zh-CN", "reference", "templates");
+  if (!candidates.includes(localizedDir)) {
+    candidates.push(localizedDir);
+  }
+  return candidates;
+}
+
 async function loadTemplate(name: string): Promise<string> {
   const cached = workspaceTemplateCache.get(name);
   if (cached) {
@@ -109,15 +129,42 @@ async function loadTemplate(name: string): Promise<string> {
 
   const pending = (async () => {
     const templateDir = await resolveWorkspaceTemplateDir();
-    const templatePath = path.join(templateDir, name);
-    try {
-      const content = await fs.readFile(templatePath, "utf-8");
-      return stripFrontMatter(content);
-    } catch {
-      throw new Error(
-        `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
-      );
+    const dirCandidates = buildTemplateDirCandidates(templateDir);
+    const nameCandidates = buildTemplateNameCandidates(name);
+    const attemptedPaths: string[] = [];
+    let lastReadError: unknown = null;
+
+    for (const dirCandidate of dirCandidates) {
+      for (const nameCandidate of nameCandidates) {
+        const templatePath = path.join(dirCandidate, nameCandidate);
+        attemptedPaths.push(templatePath);
+        try {
+          const content = await fs.readFile(templatePath, "utf-8");
+          return stripFrontMatter(content);
+        } catch (error) {
+          lastReadError = error;
+        }
+      }
     }
+
+    const errorCode =
+      typeof lastReadError === "object" &&
+      lastReadError !== null &&
+      "code" in lastReadError &&
+      typeof (lastReadError as { code?: unknown }).code === "string"
+        ? (lastReadError as { code?: string }).code
+        : "unknown";
+    const errorMessage =
+      typeof lastReadError === "object" &&
+      lastReadError !== null &&
+      "message" in lastReadError &&
+      typeof (lastReadError as { message?: unknown }).message === "string"
+        ? (lastReadError as { message?: string }).message
+        : "unavailable";
+
+    throw new Error(
+      `Missing workspace template: ${name}. Tried: ${attemptedPaths.join(", ")}. Last error: ${errorCode} (${errorMessage}).`,
+    );
   })();
 
   workspaceTemplateCache.set(name, pending);

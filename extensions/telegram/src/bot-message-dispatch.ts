@@ -658,7 +658,7 @@ export const dispatchTelegramMessage = async ({
               infoKind: "final",
               previewButtons: bufferedButtons,
             });
-            if (result !== "skipped") {
+            if (result.kind !== "skipped") {
               logReplyDelivered({
                 deliveryPath: "lane_delivery",
                 lane: "answer",
@@ -703,7 +703,7 @@ export const dispatchTelegramMessage = async ({
               }
               continue;
             }
-            if (info.kind === "final" && result !== "skipped") {
+            if (info.kind === "final" && result.kind !== "skipped") {
               logReplyDelivered({
                 deliveryPath: "lane_delivery",
                 lane: segment.lane,

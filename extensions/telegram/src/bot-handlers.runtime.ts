@@ -92,6 +92,7 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { announceTelegramTaskStarted } from "./benchmark-progress.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
@@ -1643,6 +1644,19 @@ export const registerTelegramHandlers = ({
         isForum: event.isForum,
         threadId: event.messageThreadId,
       });
+      try {
+        await announceTelegramTaskStarted({
+          cfg,
+          token: opts.token,
+          accountId,
+          api: bot.api,
+          chatId: event.chatId,
+          messageId: event.msg.message_id,
+          threadId: event.messageThreadId,
+        });
+      } catch (err) {
+        warn(`telegram benchmark start notice failed: ${String(err)}`);
+      }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,
         isGroup: event.isGroup,

@@ -40,6 +40,7 @@ import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { logTelegramBenchmarkEvent } from "./benchmark-log.js";
+import { announceTelegramTaskCompleted } from "./benchmark-progress.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
@@ -481,7 +482,7 @@ export const dispatchTelegramMessage = async ({
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   let replyDeliveredLogged = false;
-  const logReplyDelivered = (detail: Record<string, unknown>) => {
+  const logReplyDelivered = async (detail: Record<string, unknown>) => {
     if (replyDeliveredLogged) {
       return;
     }
@@ -495,6 +496,19 @@ export const dispatchTelegramMessage = async ({
       threadId: threadSpec?.id,
       ...detail,
     });
+    try {
+      await announceTelegramTaskCompleted({
+        cfg,
+        token: opts.token,
+        accountId: route.accountId,
+        api: bot.api,
+        chatId,
+        messageId: msg.message_id,
+        threadId: threadSpec?.id,
+      });
+    } catch (err) {
+      logVerbose(`telegram benchmark completion notice failed: ${String(err)}`);
+    }
   };
   const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload => {
     if (payload.text === text) {
@@ -659,7 +673,7 @@ export const dispatchTelegramMessage = async ({
               previewButtons: bufferedButtons,
             });
             if (result.kind !== "skipped") {
-              logReplyDelivered({
+              await logReplyDelivered({
                 deliveryPath: "lane_delivery",
                 lane: "answer",
                 replyKind: "final",
@@ -704,7 +718,7 @@ export const dispatchTelegramMessage = async ({
               continue;
             }
             if (info.kind === "final" && result.kind !== "skipped") {
-              logReplyDelivered({
+              await logReplyDelivered({
                 deliveryPath: "lane_delivery",
                 lane: segment.lane,
                 replyKind: info.kind,
@@ -729,7 +743,7 @@ export const dispatchTelegramMessage = async ({
                 typeof payload.text === "string" ? { ...payload, text: "" } : payload;
               const delivered = await sendPayload(payloadWithoutSuppressedReasoning);
               if (info.kind === "final" && delivered) {
-                logReplyDelivered({
+                await logReplyDelivered({
                   deliveryPath: "send_payload",
                   replyKind: info.kind,
                   hasMedia,
@@ -757,7 +771,7 @@ export const dispatchTelegramMessage = async ({
           }
           const delivered = await sendPayload(payload);
           if (info.kind === "final" && delivered) {
-            logReplyDelivered({
+            await logReplyDelivered({
               deliveryPath: "send_payload",
               replyKind: info.kind,
               hasMedia,
@@ -934,7 +948,7 @@ export const dispatchTelegramMessage = async ({
     });
     sentFallback = result.delivered;
     if (sentFallback) {
-      logReplyDelivered({
+      await logReplyDelivered({
         deliveryPath: "fallback",
         replyKind: dispatchError ? "error_fallback" : "empty_fallback",
       });

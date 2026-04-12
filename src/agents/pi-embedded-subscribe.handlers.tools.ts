@@ -1,5 +1,10 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  createTraceContext,
+  updateTraceContextPhase,
+  getTraceContext,
+} from "../infra/agent-events.js";
 import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
@@ -369,16 +374,28 @@ export async function handleToolExecutionStart(
   );
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "tool",
-    data: {
-      phase: "start",
-      name: toolName,
-      toolCallId,
-      args: args as Record<string, unknown>,
+  
+  // === NEW: Create unified trace context ===
+  const traceContext = createTraceContext(
+    ctx.params.runId,
+    ctx.params.sessionKey ?? "unknown",
+    toolName,
+    "start"
+  );
+
+  emitAgentEvent(
+    {
+      runId: ctx.params.runId,
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: toolName,
+        toolCallId,
+        args: args as Record<string, unknown>,
+      },
     },
-  });
+    traceContext // NEW: Pass trace context
+  );
   // Best-effort typing signal; do not block tool summaries on slow emitters.
   void ctx.params.onAgentEvent?.({
     stream: "tool",
@@ -430,16 +447,27 @@ export function handleToolExecutionUpdate(
   const toolCallId = String(evt.toolCallId);
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "tool",
-    data: {
-      phase: "update",
-      name: toolName,
-      toolCallId,
-      partialResult: sanitized,
+  
+  // === NEW: Get and update trace context ===
+  const traceContext = getTraceContext(ctx.params.runId);
+  if (traceContext) {
+    traceContext.openclaw_phase = "update";
+    traceContext.openclaw_timestamp_ms = Date.now();
+  }
+  
+  emitAgentEvent(
+    {
+      runId: ctx.params.runId,
+      stream: "tool",
+      data: {
+        phase: "update",
+        name: toolName,
+        toolCallId,
+        partialResult: sanitized,
+      },
     },
-  });
+    traceContext // NEW: Pass trace context
+  );
   void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {
@@ -549,18 +577,28 @@ export async function handleToolExecutionEnd(
     ctx.state.successfulCronAdds += 1;
   }
 
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      meta,
-      isError: isToolError,
-      result: sanitizedResult,
+  // === NEW: Get and update trace context ===
+  const traceContext = getTraceContext(ctx.params.runId);
+  if (traceContext) {
+    traceContext.openclaw_phase = "result";
+    traceContext.openclaw_timestamp_ms = Date.now();
+  }
+
+  emitAgentEvent(
+    {
+      runId: ctx.params.runId,
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: toolName,
+        toolCallId,
+        meta,
+        isError: isToolError,
+        result: sanitizedResult,
+      },
     },
-  });
+    traceContext // NEW: Pass trace context
+  );
   void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {

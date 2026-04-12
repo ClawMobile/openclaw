@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -86,6 +86,13 @@ type QrChannelSender = {
 };
 
 type QrSendFn = (to: string, text: string, opts: Record<string, unknown>) => Promise<unknown>;
+
+type TraceFileMatch = {
+  trajectoryId: string;
+  traceFilePath: string;
+  rootPath: string;
+  modifiedAtMs: number;
+};
 
 function coerceQrSend(send: unknown): QrSendFn | undefined {
   return typeof send === "function" ? (send as QrSendFn) : undefined;
@@ -556,12 +563,203 @@ async function sendQrPngToSupportedChannel(params: {
   return true;
 }
 
+function resolveTraceSearchRoots(): string[] {
+  const envRoots = [
+    process.env.DROIDRUN_TRAJECTORY_PATH,
+    process.env.CLAWMOBILE_TRACE_PATH,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const cwd = process.cwd();
+  const defaults = [
+    path.join(cwd, "trajectories"),
+    path.join(cwd, "..", "droidrun", "trajectories"),
+    path.join(cwd, "source-codes", "droidrun", "trajectories"),
+  ];
+  return Array.from(new Set([...envRoots, ...defaults]));
+}
+
+async function listRecentTraceMatches(limit = 5): Promise<TraceFileMatch[]> {
+  const roots = resolveTraceSearchRoots();
+  const matches: TraceFileMatch[] = [];
+
+  for (const rootPath of roots) {
+    let entries: Awaited<ReturnType<typeof readdir>>;
+    try {
+      entries = await readdir(rootPath, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const traceFilePath = path.join(rootPath, entry.name, "trace-events.jsonl");
+      try {
+        const info = await stat(traceFilePath);
+        if (!info.isFile() || info.size <= 0) {
+          continue;
+        }
+        matches.push({
+          trajectoryId: entry.name,
+          traceFilePath,
+          rootPath,
+          modifiedAtMs: info.mtimeMs,
+        });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return matches
+    .toSorted((a, b) => b.modifiedAtMs - a.modifiedAtMs)
+    .slice(0, Math.max(1, limit));
+}
+
+async function findExactTraceByTrajectoryId(trajectoryId: string): Promise<TraceFileMatch[]> {
+  const roots = resolveTraceSearchRoots();
+  const matches: TraceFileMatch[] = [];
+  for (const rootPath of roots) {
+    const traceFilePath = path.join(rootPath, trajectoryId, "trace-events.jsonl");
+    try {
+      const info = await stat(traceFilePath);
+      if (!info.isFile() || info.size <= 0) {
+        continue;
+      }
+      matches.push({
+        trajectoryId,
+        traceFilePath,
+        rootPath,
+        modifiedAtMs: info.mtimeMs,
+      });
+    } catch {
+      continue;
+    }
+  }
+  return matches;
+}
+
+async function sendTraceFileToSupportedChannel(params: {
+  api: OpenClawPluginApi;
+  ctx: QrCommandContext;
+  target: string;
+  caption: string;
+  traceFilePath: string;
+}): Promise<boolean> {
+  const mediaLocalRoots = [path.dirname(params.traceFilePath)];
+  const accountId = params.ctx.accountId?.trim() || undefined;
+  const sender = QR_CHANNEL_SENDERS[params.ctx.channel];
+  if (!sender) {
+    return false;
+  }
+  const send = sender.resolveSend(params.api);
+  if (!send) {
+    return false;
+  }
+  await send(
+    params.target,
+    params.caption,
+    {
+      ...sender.createOpts({
+        ctx: params.ctx,
+        qrFilePath: params.traceFilePath,
+        mediaLocalRoots,
+        accountId,
+      }),
+      forceDocument: true,
+    },
+  );
+  return true;
+}
+
 export default definePluginEntry({
   id: "device-pair",
   name: "Device Pair",
   description: "QR/bootstrap pairing helpers for OpenClaw devices",
   register(api: OpenClawPluginApi) {
     registerPairingNotifierService(api);
+
+    api.registerCommand({
+      name: "trace",
+      description: "Send one exact trace file by trajectory id.",
+      acceptsArgs: true,
+      handler: async (ctx) => {
+        const rawArgs = ctx.args?.trim() ?? "";
+        if (!rawArgs) {
+          const recents = await listRecentTraceMatches(5);
+          const lines = recents.map((item) => `- ${item.trajectoryId}`);
+          return {
+            text:
+              "Usage: /trace <trajectory_id>\n" +
+              "Only exact trajectory_id is accepted and sent.\n\n" +
+              (lines.length > 0
+                ? `Recent trajectory ids:\n${lines.join("\n")}`
+                : "No trace-events.jsonl found yet."),
+          };
+        }
+
+        if (rawArgs.includes(" ")) {
+          return {
+            text:
+              "Trace match must be exact. Provide exactly one trajectory_id with no extra args.",
+          };
+        }
+
+        const trajectoryId = rawArgs;
+        const strictTrajectoryIdPattern = /^[0-9]{8}_[0-9]{6}_[a-f0-9]{8}$/;
+        if (!strictTrajectoryIdPattern.test(trajectoryId)) {
+          return {
+            text:
+              "Trace match must be exact. Invalid trajectory_id format.\n" +
+              "Expected: YYYYMMDD_HHMMSS_XXXXXXXX",
+          };
+        }
+
+        const matches = await findExactTraceByTrajectoryId(trajectoryId);
+        if (matches.length === 0) {
+          return {
+            text:
+              `No exact trace match found for ${trajectoryId}.\n` +
+              "No file was sent.",
+          };
+        }
+        if (matches.length > 1) {
+          return {
+            text:
+              `Found ${matches.length} exact matches for ${trajectoryId} across roots.\n` +
+              "No file was sent to avoid ambiguity.",
+          };
+        }
+
+        const match = matches[0];
+        const target = resolveQrReplyTarget(ctx);
+        if (!target || !(ctx.channel in QR_CHANNEL_SENDERS)) {
+          return {
+            text:
+              "Trace matched exactly, but this channel cannot send files automatically.\n" +
+              `Path: ${match.traceFilePath}`,
+          };
+        }
+
+        const sent = await sendTraceFileToSupportedChannel({
+          api,
+          ctx,
+          target,
+          caption: `Trace file for ${trajectoryId} (exact match).`,
+          traceFilePath: match.traceFilePath,
+        });
+        if (!sent) {
+          return {
+            text:
+              "Trace matched exactly, but runtime send API is unavailable for this channel.\n" +
+              `Path: ${match.traceFilePath}`,
+          };
+        }
+
+        return {
+          text: `Sent trace file for exact match: ${trajectoryId}`,
+        };
+      },
+    });
 
     api.registerCommand({
       name: "pair",

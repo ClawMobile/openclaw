@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
@@ -269,6 +271,101 @@ describe("registerTelegramNativeCommands", () => {
       }),
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+  });
+
+  it("registers a hard /trace handler and sends the latest trace snapshot as a document", async () => {
+    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-workspace-"));
+    const traceDir = path.join(tempWorkspace, "logs");
+    const sendDocument = vi.fn().mockResolvedValue({ message_id: 7 });
+    try {
+      await fs.mkdir(traceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(traceDir, "clawmobile-trace.jsonl"),
+        [
+          JSON.stringify({
+            scope: "tool",
+            phase: "start",
+            invocation_id: "inv-1",
+            tool: "android_agent_task",
+            input: { goal: "Open Settings and enable Wi-Fi" },
+          }),
+          JSON.stringify({
+            scope: "tool",
+            phase: "end",
+            invocation_id: "inv-1",
+            tool: "android_agent_task",
+            ok: true,
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+      vi.stubEnv("OPENCLAW_WORKSPACE", tempWorkspace);
+
+      const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+      registerTelegramNativeCommands({
+        ...createNativeCommandTestParams({}, {
+          bot: {
+            api: {
+              setMyCommands: vi.fn().mockResolvedValue(undefined),
+              sendMessage: vi.fn().mockResolvedValue(undefined),
+              sendDocument,
+            },
+            command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+              commandHandlers.set(name, cb);
+            }),
+          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+        }),
+      });
+
+      const handler = commandHandlers.get("trace");
+      expect(handler).toBeTruthy();
+      await handler?.(createPrivateCommandContext());
+
+      expect(sendDocument).toHaveBeenCalledTimes(1);
+      expect(sendDocument.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({
+          caption: expect.stringContaining("open-settings-and-enable-wi-fi"),
+        }),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(tempWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects /trace when extra arguments are provided", async () => {
+    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendDocument = vi.fn().mockResolvedValue({ message_id: 7 });
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}, {
+        bot: {
+          api: {
+            setMyCommands: vi.fn().mockResolvedValue(undefined),
+            sendMessage,
+            sendDocument,
+          },
+          command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+            commandHandlers.set(name, cb);
+          }),
+        } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      }),
+    });
+
+    const handler = commandHandlers.get("trace");
+    expect(handler).toBeTruthy();
+    await handler?.({
+      ...createPrivateCommandContext(),
+      match: "extra words",
+    });
+
+    expect(sendDocument).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      123,
+      "Use /trace with no arguments.",
+      expect.any(Object),
+    );
   });
 
   it("sends plugin command error replies silently when silentErrorReplies is enabled", async () => {

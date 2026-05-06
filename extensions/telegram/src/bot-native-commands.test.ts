@@ -333,6 +333,144 @@ describe("registerTelegramNativeCommands", () => {
     }
   });
 
+
+  it("sends an indexed trace snapshot for /trace <number>", async () => {
+    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-workspace-"));
+    const traceDir = path.join(tempWorkspace, "logs");
+    const sendDocument = vi.fn().mockResolvedValue({ message_id: 7 });
+    try {
+      await fs.mkdir(traceDir, { recursive: true });
+      const newest = path.join(
+        traceDir,
+        "clawmobile-trace-android_type-2000-android_type_2000_2.jsonl",
+      );
+      const older = path.join(
+        traceDir,
+        "clawmobile-trace-android_tap-1000-android_tap_1000_1.jsonl",
+      );
+      await fs.writeFile(
+        newest,
+        JSON.stringify({
+          timestamp: "2026-01-02T00:00:00.000Z",
+          backend: "adb",
+          tool: "android_type",
+          action: "android_type",
+          action_parameters: { text: "newer" },
+        }) + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        older,
+        JSON.stringify({
+          timestamp: "2026-01-01T00:00:00.000Z",
+          backend: "adb",
+          tool: "android_tap",
+          action: "android_tap",
+          action_parameters: { x: 10, y: 20 },
+        }) + "\n",
+        "utf-8",
+      );
+      await fs.utimes(newest, new Date("2026-01-02T00:00:00.000Z"), new Date("2026-01-02T00:00:00.000Z"));
+      await fs.utimes(older, new Date("2026-01-01T00:00:00.000Z"), new Date("2026-01-01T00:00:00.000Z"));
+      vi.stubEnv("OPENCLAW_WORKSPACE", tempWorkspace);
+
+      const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+      registerTelegramNativeCommands({
+        ...createNativeCommandTestParams({}, {
+          bot: {
+            api: {
+              setMyCommands: vi.fn().mockResolvedValue(undefined),
+              sendMessage: vi.fn().mockResolvedValue(undefined),
+              sendDocument,
+            },
+            command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+              commandHandlers.set(name, cb);
+            }),
+          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+        }),
+      });
+
+      const handler = commandHandlers.get("trace");
+      expect(handler).toBeTruthy();
+      await handler?.(createPrivateCommandContext({ match: "2" }));
+
+      expect(sendDocument).toHaveBeenCalledTimes(1);
+      expect(sendDocument.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ caption: "ClawMobile trace: trace-2" }),
+      );
+      const snapshots = (await fs.readdir(traceDir)).filter((name) =>
+        name.startsWith("clawmobile-trace-trace-2-"),
+      );
+      expect(snapshots).toHaveLength(1);
+      await expect(fs.readFile(path.join(traceDir, snapshots[0] ?? ""), "utf-8")).resolves.toContain(
+        '"x":10',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(tempWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  it("handles /trace_list and /trace_clear with direct Telegram handlers", async () => {
+    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-workspace-"));
+    const traceDir = path.join(tempWorkspace, "logs");
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    try {
+      await fs.mkdir(traceDir, { recursive: true });
+      const runTrace = path.join(
+        traceDir,
+        "clawmobile-trace-android_tap-1000-android_tap_1000_1.jsonl",
+      );
+      const snapshotTrace = path.join(traceDir, "clawmobile-trace-old-snapshot-1.jsonl");
+      await fs.writeFile(
+        runTrace,
+        JSON.stringify({
+          timestamp: "2026-01-01T00:00:00.000Z",
+          backend: "adb",
+          tool: "android_tap",
+          action: "android_tap",
+          action_parameters: { x: 10, y: 20 },
+        }) + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(snapshotTrace, "{}\n", "utf-8");
+      vi.stubEnv("OPENCLAW_WORKSPACE", tempWorkspace);
+
+      const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+      registerTelegramNativeCommands({
+        ...createNativeCommandTestParams({}, {
+          bot: {
+            api: {
+              setMyCommands: vi.fn().mockResolvedValue(undefined),
+              sendMessage,
+              sendDocument: vi.fn().mockResolvedValue({ message_id: 7 }),
+            },
+            command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+              commandHandlers.set(name, cb);
+            }),
+          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+        }),
+      });
+
+      await commandHandlers.get("trace_list")?.(createPrivateCommandContext({ chatId: 123 }));
+      expect(sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("1. 2026-01-01T00:00:00.000Z android_tap/adb 1 actions"),
+        expect.any(Object),
+      );
+
+      await commandHandlers.get("trace_clear")?.(createPrivateCommandContext({ chatId: 123 }));
+      expect(sendMessage).toHaveBeenLastCalledWith(
+        123,
+        expect.stringContaining("Deleted 2 trace file(s)"),
+        expect.any(Object),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(tempWorkspace, { recursive: true, force: true });
+    }
+  });
+
   it("rejects /trace when extra arguments are provided", async () => {
     const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
     const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -356,14 +494,14 @@ describe("registerTelegramNativeCommands", () => {
     const handler = commandHandlers.get("trace");
     expect(handler).toBeTruthy();
     await handler?.({
-      ...createPrivateCommandContext(),
+      ...createPrivateCommandContext({ chatId: 123 }),
       match: "extra words",
     });
 
     expect(sendDocument).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       123,
-      "Use /trace with no arguments.",
+      "Use /trace or /trace <number>.",
       expect.any(Object),
     );
   });

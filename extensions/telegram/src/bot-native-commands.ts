@@ -1,4 +1,5 @@
 import { InputFile, type Bot, type Context } from "grammy";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,8 +108,41 @@ type ClawMobileTraceEvent = {
   invocation_id?: string;
   tool?: string;
   ok?: boolean;
+  timestamp?: string;
+  backend?: string;
+  action?: string;
+  action_parameters?: unknown;
   input?: Record<string, unknown>;
 };
+
+type ClawMobileTraceRunFile = {
+  file: string;
+  stat: Stats;
+};
+
+type ClawMobileTraceSummary = {
+  actions: number;
+  startedAt?: string;
+  tool?: string;
+  backend?: string;
+  firstAction?: string;
+  lastAction?: string;
+  label?: string;
+};
+
+type ClawMobileTraceListEntry = ClawMobileTraceSummary & {
+  index: number;
+  path: string;
+  filename: string;
+  bytes: number;
+  modifiedAt: string;
+};
+
+const CLAWMOBILE_LEGACY_TRACE_FILENAME = "clawmobile-trace.jsonl";
+const CLAWMOBILE_TRACE_RUN_FILENAME_RE =
+  /^clawmobile-trace-(.+)-\d+-\1_\d+_\d+\.jsonl$/i;
+const CLAWMOBILE_TRACE_ARTIFACT_FILENAME_RE = /^clawmobile-trace.*\.jsonl$/i;
+const CLAWMOBILE_TRACE_LIST_LIMIT = 50;
 
 function resolveClawMobileWorkspaceDir(): string {
   const explicit = process.env.OPENCLAW_WORKSPACE?.trim();
@@ -118,8 +152,20 @@ function resolveClawMobileWorkspaceDir(): string {
   return path.join(resolveStateDir(process.env, os.homedir), "workspace");
 }
 
-function resolveClawMobileTracePath(): string {
-  return path.join(resolveClawMobileWorkspaceDir(), "logs", "clawmobile-trace.jsonl");
+function resolveClawMobileLogsDir(): string {
+  return path.join(resolveClawMobileWorkspaceDir(), "logs");
+}
+
+function resolveClawMobileLegacyTracePath(): string {
+  return path.join(resolveClawMobileLogsDir(), CLAWMOBILE_LEGACY_TRACE_FILENAME);
+}
+
+function isClawMobileTraceRunFilename(name: string): boolean {
+  return name === CLAWMOBILE_LEGACY_TRACE_FILENAME || CLAWMOBILE_TRACE_RUN_FILENAME_RE.test(name);
+}
+
+function isClawMobileTraceArtifactFilename(name: string): boolean {
+  return CLAWMOBILE_TRACE_ARTIFACT_FILENAME_RE.test(name);
 }
 
 function sanitizeTraceLabel(label?: string): string {
@@ -130,6 +176,45 @@ function sanitizeTraceLabel(label?: string): string {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
   return trimmed || "trace";
+}
+
+function formatTraceBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KiB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+async function collectClawMobileTraceFiles(
+  predicate: (name: string) => boolean,
+): Promise<ClawMobileTraceRunFile[]> {
+  const dir = resolveClawMobileLogsDir();
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+
+  const files: ClawMobileTraceRunFile[] = [];
+  for (const name of names) {
+    if (!predicate(name)) {
+      continue;
+    }
+    const file = path.join(dir, name);
+    try {
+      const stat = await fs.stat(file);
+      if (stat.isFile()) {
+        files.push({ file, stat });
+      }
+    } catch {
+      // Ignore files that disappear while listing.
+    }
+  }
+  return files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
 }
 
 function summarizeTraceInput(tool?: string, input?: Record<string, unknown>): string | null {
@@ -161,11 +246,233 @@ function summarizeTraceInput(tool?: string, input?: Record<string, unknown>): st
   return typeof tool === "string" && tool.trim() ? tool : null;
 }
 
-async function exportClawMobileTraceSnapshotForTelegram(): Promise<
-  | { ok: true; path: string; label: string; source: string }
-  | { ok: false; error: string; path: string }
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function summarizeTraceAction(event: ClawMobileTraceEvent): string | null {
+  const action = typeof event.action === "string" ? event.action.trim() : "";
+  const params = asRecord(event.action_parameters);
+
+  if (action === "android_agent_task") {
+    const goal = typeof params?.goal === "string" ? params.goal.trim() : "";
+    return goal || null;
+  }
+  if (action === "android_type" || action === "input") {
+    const text = typeof params?.text === "string" ? params.text.trim() : "";
+    return text ? `type ${text}` : action;
+  }
+  if (action === "android_tap" || action === "tap") {
+    const x = typeof params?.x === "number" ? params.x : null;
+    const y = typeof params?.y === "number" ? params.y : null;
+    return x != null && y != null ? `tap ${x} ${y}` : action;
+  }
+  if (action === "android_swipe" || action === "scroll") {
+    return "swipe";
+  }
+  if (action) {
+    return action;
+  }
+  return summarizeTraceInput(event.tool, event.input);
+}
+
+async function summarizeClawMobileTraceFile(file: string): Promise<ClawMobileTraceSummary> {
+  let raw = "";
+  try {
+    raw = await fs.readFile(file, "utf-8");
+  } catch {
+    return { actions: 0 };
+  }
+
+  let actions = 0;
+  let first: ClawMobileTraceEvent | null = null;
+  let last: ClawMobileTraceEvent | null = null;
+  const legacyEvents: ClawMobileTraceEvent[] = [];
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    actions += 1;
+    try {
+      const event = JSON.parse(line) as ClawMobileTraceEvent;
+      legacyEvents.push(event);
+      if (event.action) {
+        if (!first) {
+          first = event;
+        }
+        last = event;
+      }
+    } catch {
+      // Ignore malformed trace lines and keep scanning the rest.
+    }
+  }
+
+  if (!first && legacyEvents.length > 0) {
+    for (let i = legacyEvents.length - 1; i >= 0; i -= 1) {
+      const event = legacyEvents[i];
+      if (event.scope === "tool" && event.phase === "start") {
+        first = event;
+        last = last ?? event;
+        break;
+      }
+    }
+  }
+
+  const label = first ? summarizeTraceAction(first) : null;
+  const lastAction = last?.action ?? (last ? (summarizeTraceAction(last) ?? undefined) : undefined);
+  return {
+    actions,
+    startedAt: first?.timestamp,
+    tool: first?.tool,
+    backend: first?.backend,
+    firstAction: first?.action ?? (label ?? undefined),
+    lastAction,
+    label: label ?? first?.tool ?? undefined,
+  };
+}
+
+async function buildClawMobileTraceEntry(
+  item: ClawMobileTraceRunFile,
+  index: number,
+): Promise<ClawMobileTraceListEntry> {
+  const summary = await summarizeClawMobileTraceFile(item.file);
+  return {
+    index,
+    path: item.file,
+    filename: path.basename(item.file),
+    bytes: item.stat.size,
+    modifiedAt: new Date(item.stat.mtimeMs).toISOString(),
+    ...summary,
+  };
+}
+
+function formatClawMobileTraceList(traces: ClawMobileTraceListEntry[], count: number): string {
+  if (!traces.length) {
+    return "No ClawMobile traces found.";
+  }
+
+  const lines = traces.map((trace) => {
+    const time = trace.startedAt || trace.modifiedAt;
+    const label = trace.tool || "trace";
+    const backend = trace.backend ? `/${trace.backend}` : "";
+    const lastAction = trace.lastAction ? ` last=${trace.lastAction}` : "";
+    return `${trace.index}. ${time} ${label}${backend} ${trace.actions} actions ${formatTraceBytes(
+      trace.bytes,
+    )}${lastAction}`;
+  });
+
+  if (traces.length < count) {
+    lines.push(`... ${count - traces.length} more traces not shown`);
+  }
+
+  return lines.join("\n");
+}
+
+async function listClawMobileTracesForTelegram(limit = CLAWMOBILE_TRACE_LIST_LIMIT) {
+  const files = await collectClawMobileTraceFiles(isClawMobileTraceRunFilename);
+  const cappedLimit = Math.max(1, Math.min(Math.trunc(limit), 200));
+  const traces = await Promise.all(
+    files.slice(0, cappedLimit).map((item, i) => buildClawMobileTraceEntry(item, i + 1)),
+  );
+
+  return {
+    ok: true as const,
+    count: files.length,
+    returned: traces.length,
+    traces,
+    text: formatClawMobileTraceList(traces, files.length),
+  };
+}
+
+async function getClawMobileTraceByIndex(index: number) {
+  const normalized = Math.trunc(Number(index));
+  const files = await collectClawMobileTraceFiles(isClawMobileTraceRunFilename);
+  const preview = await listClawMobileTracesForTelegram(CLAWMOBILE_TRACE_LIST_LIMIT);
+
+  if (!Number.isFinite(normalized) || normalized < 1) {
+    return {
+      ok: false as const,
+      error: "invalid_trace_index",
+      index,
+      count: files.length,
+      text: preview.text,
+    };
+  }
+
+  const item = files[normalized - 1];
+  if (!item) {
+    return {
+      ok: false as const,
+      error: "trace_index_not_found",
+      index: normalized,
+      count: files.length,
+      text: preview.text,
+    };
+  }
+
+  return { ok: true as const, trace: await buildClawMobileTraceEntry(item, normalized) };
+}
+
+async function clearClawMobileTracesForTelegram() {
+  const files = await collectClawMobileTraceFiles(isClawMobileTraceArtifactFilename);
+  let deleted = 0;
+  let bytes = 0;
+  const errors: Array<{ path: string; error: string }> = [];
+
+  for (const item of files) {
+    try {
+      await fs.unlink(item.file);
+      deleted += 1;
+      bytes += item.stat.size;
+    } catch (error) {
+      errors.push({ path: item.file, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    deleted,
+    bytes,
+    errors,
+    text: errors.length
+      ? `Deleted ${deleted} trace file(s), failed to delete ${errors.length}.`
+      : `Deleted ${deleted} trace file(s), freed ${formatTraceBytes(bytes)}.`,
+  };
+}
+
+async function exportSelectedClawMobileTraceSnapshotForTelegram(input?: {
+  index?: number;
+  label?: string;
+}): Promise<
+  | { ok: true; path: string; label: string; source: string; index?: number }
+  | { ok: false; error: string; path: string; text?: string }
 > {
-  const source = resolveClawMobileTracePath();
+  let source = "";
+  let selectedTrace: ClawMobileTraceListEntry | undefined;
+  if (input?.index !== undefined) {
+    const selected = await getClawMobileTraceByIndex(input.index);
+    if (!selected.ok) {
+      return {
+        ok: false,
+        error: selected.error,
+        path: "",
+        text: selected.text,
+      };
+    }
+    selectedTrace = selected.trace;
+    source = selected.trace.path;
+  } else {
+    const files = await collectClawMobileTraceFiles(isClawMobileTraceRunFilename);
+    source = files[0]?.file ?? resolveClawMobileLegacyTracePath();
+    if (files[0]) {
+      selectedTrace = await buildClawMobileTraceEntry(files[0], 1);
+    }
+  }
+
   let content: string;
   try {
     content = await fs.readFile(source, "utf-8");
@@ -195,6 +502,9 @@ async function exportClawMobileTraceSnapshotForTelegram(): Promise<
       tool = event.tool;
       break;
     }
+    if (!tool && event.tool) {
+      tool = event.tool;
+    }
   }
 
   let summary: string | null = null;
@@ -212,14 +522,25 @@ async function exportClawMobileTraceSnapshotForTelegram(): Promise<
       }
     }
   }
+  if (!summary && events.length > 0) {
+    summary = summarizeTraceAction(events[0]);
+    tool = events[0]?.tool ?? tool;
+  }
 
-  const safeLabel = sanitizeTraceLabel(summary ?? tool ?? "trace");
+  const fallbackLabel = sanitizeTraceLabel(summary ?? tool ?? "trace");
+  const label = sanitizeTraceLabel(input?.label ?? selectedTrace?.label ?? fallbackLabel);
   const snapshotPath = path.join(
     path.dirname(source),
-    `clawmobile-trace-${safeLabel}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.jsonl`,
+    `clawmobile-trace-${label}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.jsonl`,
   );
   await fs.copyFile(source, snapshotPath);
-  return { ok: true, path: snapshotPath, label: safeLabel, source };
+  return {
+    ok: true,
+    path: snapshotPath,
+    label,
+    source,
+    ...(selectedTrace ? { index: selectedTrace.index } : {}),
+  };
 }
 
 export type RegisterTelegramHandlerParams = {
@@ -703,31 +1024,13 @@ export const registerTelegramNativeCommands = ({
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
-      bot.command("trace", async (ctx: TelegramNativeCommandContext) => {
+      const resolveTraceCommandContext = async (ctx: TelegramNativeCommandContext) => {
         const msg = ctx.message;
         if (!msg) {
-          return;
+          return null;
         }
         if (shouldSkipUpdate(ctx)) {
-          return;
-        }
-        const rawText = ctx.match?.trim() ?? "";
-        if (rawText) {
-          await withTelegramApiErrorLogging({
-            operation: "sendMessage",
-            runtime,
-            fn: () =>
-              bot.api.sendMessage(msg.chat.id, "Use /trace with no arguments.", {
-                ...(buildTelegramThreadParams(
-                  resolveTelegramThreadSpec({
-                    isGroup: msg.chat.type === "group" || msg.chat.type === "supergroup",
-                    isForum: (msg.chat as { is_forum?: boolean }).is_forum === true,
-                    messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
-                  }),
-                ) ?? {}),
-              }),
-          });
-          return;
+          return null;
         }
         const runtimeCfg = loadFreshRuntimeConfig();
         const runtimeTelegramCfg = resolveFreshTelegramConfig(runtimeCfg);
@@ -746,7 +1049,7 @@ export const registerTelegramNativeCommands = ({
           requireAuth: true,
         });
         if (!auth) {
-          return;
+          return null;
         }
         const threadParams =
           buildTelegramThreadParams(
@@ -756,18 +1059,57 @@ export const registerTelegramNativeCommands = ({
               messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
             }),
           ) ?? {};
-        const exported = await exportClawMobileTraceSnapshotForTelegram();
+        return { auth, threadParams };
+      };
+
+      const sendTraceCommandText = async (
+        auth: TelegramCommandAuthResult,
+        threadParams: Record<string, unknown>,
+        text: string,
+      ) => {
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () => bot.api.sendMessage(auth.chatId, text, threadParams),
+        });
+      };
+
+      bot.command("trace_list", async (ctx: TelegramNativeCommandContext) => {
+        const resolved = await resolveTraceCommandContext(ctx);
+        if (!resolved) {
+          return;
+        }
+        const listed = await listClawMobileTracesForTelegram(CLAWMOBILE_TRACE_LIST_LIMIT);
+        await sendTraceCommandText(resolved.auth, resolved.threadParams, listed.text);
+      });
+
+      bot.command("trace_clear", async (ctx: TelegramNativeCommandContext) => {
+        const resolved = await resolveTraceCommandContext(ctx);
+        if (!resolved) {
+          return;
+        }
+        const cleared = await clearClawMobileTracesForTelegram();
+        await sendTraceCommandText(resolved.auth, resolved.threadParams, cleared.text);
+      });
+
+      bot.command("trace", async (ctx: TelegramNativeCommandContext) => {
+        const rawText = ctx.match?.trim() ?? "";
+        const index = rawText ? Number.parseInt(rawText, 10) : undefined;
+        const hasInvalidArgs = rawText.length > 0 && !/^\d+$/.test(rawText);
+        const resolved = await resolveTraceCommandContext(ctx);
+        if (!resolved) {
+          return;
+        }
+        if (hasInvalidArgs) {
+          await sendTraceCommandText(resolved.auth, resolved.threadParams, "Use /trace or /trace <number>.");
+          return;
+        }
+        const exported = await exportSelectedClawMobileTraceSnapshotForTelegram(
+          index !== undefined ? { index, label: `trace-${index}` } : undefined,
+        );
         if (!exported.ok) {
-          await withTelegramApiErrorLogging({
-            operation: "sendMessage",
-            runtime,
-            fn: () =>
-              bot.api.sendMessage(
-                auth.chatId,
-                `ClawMobile trace file was not found yet: ${exported.path}`,
-                threadParams,
-              ),
-          });
+          const text = exported.text ?? `ClawMobile trace file was not found yet: ${exported.path}`;
+          await sendTraceCommandText(resolved.auth, resolved.threadParams, text);
           return;
         }
         const file = new InputFile(exported.path, path.basename(exported.path));
@@ -775,9 +1117,9 @@ export const registerTelegramNativeCommands = ({
           operation: "sendDocument",
           runtime,
           fn: () =>
-            bot.api.sendDocument(auth.chatId, file, {
+            bot.api.sendDocument(resolved.auth.chatId, file, {
               caption: `ClawMobile trace: ${exported.label}`,
-              ...threadParams,
+              ...resolved.threadParams,
             }),
         });
       });

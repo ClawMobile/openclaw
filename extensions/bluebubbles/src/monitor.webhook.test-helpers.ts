@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { handleBlueBubblesWebhookRequest } from "./monitor.js";
 import { registerBlueBubblesWebhookTarget } from "./monitor.js";
@@ -16,6 +16,11 @@ export type WebhookRequestParams = {
 };
 
 export const LOOPBACK_REMOTE_ADDRESSES_FOR_TEST = ["127.0.0.1", "::1", "::ffff:127.0.0.1"] as const;
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type HangingWebhookRequestForTest = {
+  req: IncomingMessage;
+  destroyMock: UnknownMock;
+};
 
 export function createMockAccount(
   overrides: Partial<ResolvedBlueBubblesAccount["config"]> = {},
@@ -29,7 +34,7 @@ export function createMockAccount(
       password: "test-password",
       dmPolicy: "open",
       groupPolicy: "open",
-      allowFrom: [],
+      allowFrom: ["*"],
       groupAllowFrom: [],
       ...overrides,
     },
@@ -63,7 +68,7 @@ export function createTimestampedNewMessagePayloadForTest(
   });
 }
 
-export function createMessageReactionPayloadForTest(dataOverrides: Record<string, unknown> = {}) {
+function createMessageReactionPayloadForTest(dataOverrides: Record<string, unknown> = {}) {
   return {
     type: "message-reaction",
     data: {
@@ -123,7 +128,7 @@ export function createMockRequest(
   return req;
 }
 
-export function createMockRequestForTest(params: WebhookRequestParams = {}): IncomingMessage {
+function createMockRequestForTest(params: WebhookRequestParams = {}): IncomingMessage {
   return createMockRequest(
     params.method ?? "POST",
     params.url ?? "/bluebubbles-webhook",
@@ -182,7 +187,7 @@ export function createLoopbackWebhookRequestParamsForTest(
 export function createHangingWebhookRequestForTest(
   url = "/bluebubbles-webhook?password=test-password",
   remoteAddress = "127.0.0.1",
-) {
+): HangingWebhookRequestForTest {
   const req = new EventEmitter() as IncomingMessage;
   const destroyMock = vi.fn();
   req.method = "POST";
@@ -193,7 +198,7 @@ export function createHangingWebhookRequestForTest(
   return { req, destroyMock };
 }
 
-export function createMockResponse(): ServerResponse & { body: string; statusCode: number } {
+function createMockResponse(): ServerResponse & { body: string; statusCode: number } {
   const res = {
     statusCode: 200,
     body: "",
@@ -205,7 +210,7 @@ export function createMockResponse(): ServerResponse & { body: string; statusCod
   return res;
 }
 
-export async function flushAsync() {
+async function flushAsync() {
   for (let i = 0; i < 2; i += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -264,7 +269,7 @@ export function trackWebhookRegistrationForTest<T extends { unregister: () => vo
   return registration;
 }
 
-export function registerWebhookTargetForTest(params: {
+function registerWebhookTargetForTest(params: {
   core: PluginRuntime;
   account?: ResolvedBlueBubblesAccount;
   config?: OpenClawConfig;
@@ -287,7 +292,7 @@ export function registerWebhookTargetForTest(params: {
   });
 }
 
-export function registerWebhookTargetsForTest(params: {
+function registerWebhookTargetsForTest(params: {
   core: PluginRuntime;
   accounts: Array<{
     account: ResolvedBlueBubblesAccount;

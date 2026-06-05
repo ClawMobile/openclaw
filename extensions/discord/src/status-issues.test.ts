@@ -68,15 +68,25 @@ describe("collectDiscordStatusIssues", () => {
     expect(issues[0]?.message).toContain("guilds.ops.channels");
   });
 
-  it("ignores accounts that are not enabled and configured", () => {
-    expect(
-      collectDiscordStatusIssues([
-        {
-          accountId: "ops",
-          enabled: false,
-          configured: true,
-        } as ChannelAccountSnapshot,
-      ]),
-    ).toEqual([]);
+  it("reports degraded runtime transport state", () => {
+    const issues = collectDiscordStatusIssues([
+      {
+        accountId: "ops",
+        enabled: true,
+        configured: true,
+        running: true,
+        connected: true,
+        healthState: "stale-socket",
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "ops",
+        kind: "runtime",
+        message: expect.stringContaining("stale-socket"),
+      }),
+    ]);
   });
 });

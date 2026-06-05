@@ -3,24 +3,27 @@
  *
  * Handles bidirectional audio streaming between Twilio and the AI services.
  * - Receives mu-law audio from Twilio via WebSocket
- * - Forwards to OpenAI Realtime STT for transcription
+ * - Forwards to the selected realtime transcription provider
  * - Sends TTS audio back to Twilio
  */
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { WebSocket, WebSocketServer } from "ws";
 import type {
-  OpenAIRealtimeSTTProvider,
-  RealtimeSTTSession,
-} from "./providers/stt-openai-realtime.js";
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeTranscriptionSession,
+} from "openclaw/plugin-sdk/realtime-transcription";
+import { type RawData, WebSocket, WebSocketServer } from "ws";
 
 /**
  * Configuration for the media stream handler.
  */
 export interface MediaStreamConfig {
-  /** STT provider for transcription */
-  sttProvider: OpenAIRealtimeSTTProvider;
+  /** Realtime transcription provider for streaming STT. */
+  transcriptionProvider: RealtimeTranscriptionProviderPlugin;
+  /** Provider-owned config blob passed into the transcription session. */
+  providerConfig: RealtimeTranscriptionProviderConfig;
   /** Close sockets that never send a valid `start` frame within this window. */
   preStartTimeoutMs?: number;
   /** Max concurrent pre-start sockets. */
@@ -29,6 +32,8 @@ export interface MediaStreamConfig {
   maxPendingConnectionsPerIp?: number;
   /** Max total open sockets (pending + active sessions). */
   maxConnections?: number;
+  /** Optional trusted resolver for the source IP used by pending-connection guards. */
+  resolveClientIp?: (request: IncomingMessage) => string | undefined;
   /** Validate whether to accept a media stream for the given call ID */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
@@ -37,6 +42,8 @@ export interface MediaStreamConfig {
   onPartialTranscript?: (callId: string, partial: string) => void;
   /** Callback when stream connects */
   onConnect?: (callId: string, streamSid: string) => void;
+  /** Callback when realtime transcription is ready for the stream */
+  onTranscriptionReady?: (callId: string, streamSid: string) => void;
   /** Callback when speech starts (barge-in) */
   onSpeechStart?: (callId: string) => void;
   /** Callback when stream disconnects */
@@ -50,7 +57,7 @@ interface StreamSession {
   callId: string;
   streamSid: string;
   ws: WebSocket;
-  sttSession: RealtimeSTTSession;
+  sttSession: RealtimeTranscriptionSession;
 }
 
 type TtsQueueEntry = {
@@ -76,18 +83,29 @@ const DEFAULT_PRE_START_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_PENDING_CONNECTIONS = 32;
 const DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP = 4;
 const DEFAULT_MAX_CONNECTIONS = 128;
+const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
 const CLOSE_REASON_LOG_MAX_CHARS = 120;
 
 export function sanitizeLogText(value: string, maxChars: number): string {
   const sanitized = value
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\p{Cc}/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (sanitized.length <= maxChars) {
     return sanitized;
   }
   return `${sanitized.slice(0, maxChars)}...`;
+}
+
+function normalizeWsMessageData(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data);
+  }
+  return Buffer.from(data);
 }
 
 /**
@@ -105,6 +123,7 @@ export class MediaStreamHandler {
   private maxPendingConnections: number;
   private maxPendingConnectionsPerIp: number;
   private maxConnections: number;
+  private inflightUpgrades = 0;
   /** TTS playback queues per stream (serialize audio to prevent overlap) */
   private ttsQueues = new Map<string, TtsQueueEntry[]>();
   /** Whether TTS is currently playing per stream */
@@ -126,19 +145,50 @@ export class MediaStreamHandler {
    */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (!this.wss) {
-      this.wss = new WebSocketServer({ noServer: true });
+      this.wss = new WebSocketServer({
+        noServer: true,
+        // Reject oversized frames before app-level parsing runs on unauthenticated sockets.
+        maxPayload: MAX_INBOUND_MESSAGE_BYTES,
+      });
       this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
     }
 
-    const currentConnections = this.wss.clients.size;
+    const currentConnections = this.getCurrentConnectionCount();
     if (currentConnections >= this.maxConnections) {
       this.rejectUpgrade(socket, 503, "Too many media stream connections");
       return;
     }
 
-    this.wss.handleUpgrade(request, socket, head, (ws) => {
-      this.wss?.emit("connection", ws, request);
-    });
+    this.inflightUpgrades += 1;
+    let released = false;
+    const releaseUpgradeReservation = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.inflightUpgrades = Math.max(0, this.inflightUpgrades - 1);
+    };
+    const handleUpgradeAbort = () => {
+      socket.removeListener("error", handleUpgradeAbort);
+      socket.removeListener("close", handleUpgradeAbort);
+      releaseUpgradeReservation();
+    };
+    socket.once("error", handleUpgradeAbort);
+    socket.once("close", handleUpgradeAbort);
+
+    try {
+      this.wss.handleUpgrade(request, socket, head, (ws) => {
+        socket.removeListener("error", handleUpgradeAbort);
+        socket.removeListener("close", handleUpgradeAbort);
+        releaseUpgradeReservation();
+        this.wss?.emit("connection", ws, request);
+      });
+    } catch (error) {
+      socket.removeListener("error", handleUpgradeAbort);
+      socket.removeListener("close", handleUpgradeAbort);
+      releaseUpgradeReservation();
+      throw error;
+    }
   }
 
   /**
@@ -154,9 +204,10 @@ export class MediaStreamHandler {
       return;
     }
 
-    ws.on("message", async (data: Buffer) => {
+    ws.on("message", async (data: RawData) => {
       try {
-        const message = JSON.parse(data.toString()) as TwilioMediaMessage;
+        const raw = normalizeWsMessageData(data);
+        const message = JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
 
         switch (message.event) {
           case "connected":
@@ -164,7 +215,7 @@ export class MediaStreamHandler {
             break;
 
           case "start":
-            session = await this.handleStart(ws, message, streamToken);
+            session = this.handleStart(ws, message, streamToken);
             if (session) {
               this.clearPendingConnection(ws);
             }
@@ -183,6 +234,10 @@ export class MediaStreamHandler {
               this.handleStop(session);
               session = null;
             }
+            break;
+
+          case "clear":
+          case "mark":
             break;
         }
       } catch (error) {
@@ -210,11 +265,11 @@ export class MediaStreamHandler {
   /**
    * Handle stream start event.
    */
-  private async handleStart(
+  private handleStart(
     ws: WebSocket,
     message: TwilioMediaMessage,
     streamToken?: string,
-  ): Promise<StreamSession | null> {
+  ): StreamSession | null {
     const streamSid = message.streamSid || "";
     const callSid = message.start?.callSid || "";
 
@@ -238,20 +293,20 @@ export class MediaStreamHandler {
       return null;
     }
 
-    // Create STT session
-    const sttSession = this.config.sttProvider.createSession();
-
-    // Set up transcript callbacks
-    sttSession.onPartial((partial) => {
-      this.config.onPartialTranscript?.(callSid, partial);
-    });
-
-    sttSession.onTranscript((transcript) => {
-      this.config.onTranscript?.(callSid, transcript);
-    });
-
-    sttSession.onSpeechStart(() => {
-      this.config.onSpeechStart?.(callSid);
+    const sttSession = this.config.transcriptionProvider.createSession({
+      providerConfig: this.config.providerConfig,
+      onPartial: (partial) => {
+        this.config.onPartialTranscript?.(callSid, partial);
+      },
+      onTranscript: (transcript) => {
+        this.config.onTranscript?.(callSid, transcript);
+      },
+      onSpeechStart: () => {
+        this.config.onSpeechStart?.(callSid);
+      },
+      onError: (error) => {
+        console.warn("[MediaStream] Transcription session error:", error.message);
+      },
     });
 
     const session: StreamSession = {
@@ -262,16 +317,40 @@ export class MediaStreamHandler {
     };
 
     this.sessions.set(streamSid, session);
-
-    // Notify connection BEFORE STT connect so TTS can work even if STT fails
     this.config.onConnect?.(callSid, streamSid);
-
-    // Connect to OpenAI STT (non-blocking, log errors but don't fail the call)
-    sttSession.connect().catch((err) => {
-      console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
-    });
+    void this.connectTranscriptionAndNotify(session);
 
     return session;
+  }
+
+  private async connectTranscriptionAndNotify(session: StreamSession): Promise<void> {
+    try {
+      await session.sttSession.connect();
+    } catch (error) {
+      console.warn(
+        "[MediaStream] STT connection failed; closing media stream:",
+        error instanceof Error ? error.message : String(error),
+      );
+      if (
+        this.sessions.get(session.streamSid) === session &&
+        session.ws.readyState === WebSocket.OPEN
+      ) {
+        session.ws.close(1011, "STT connection failed");
+      } else {
+        session.sttSession.close();
+      }
+      return;
+    }
+
+    if (
+      this.sessions.get(session.streamSid) !== session ||
+      session.ws.readyState !== WebSocket.OPEN
+    ) {
+      session.sttSession.close();
+      return;
+    }
+
+    this.config.onTranscriptionReady?.(session.callId, session.streamSid);
   }
 
   /**
@@ -299,7 +378,15 @@ export class MediaStreamHandler {
   }
 
   private getClientIp(request: IncomingMessage): string {
+    const resolvedIp = this.config.resolveClientIp?.(request)?.trim();
+    if (resolvedIp) {
+      return resolvedIp;
+    }
     return request.socket.remoteAddress || "unknown";
+  }
+
+  private getCurrentConnectionCount(): number {
+    return this.wss ? this.wss.clients.size + this.inflightUpgrades : this.inflightUpgrades;
   }
 
   private registerPendingConnection(ws: WebSocket, ip: string): boolean {
@@ -500,7 +587,7 @@ export class MediaStreamHandler {
    */
   clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
     const queue = this.getTtsQueue(streamSid);
-    queue.length = 0;
+    this.resolveQueuedTtsEntries(queue);
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.clearAudio(streamSid);
   }
@@ -573,12 +660,20 @@ export class MediaStreamHandler {
   private clearTtsState(streamSid: string): void {
     const queue = this.ttsQueues.get(streamSid);
     if (queue) {
-      queue.length = 0;
+      this.resolveQueuedTtsEntries(queue);
     }
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.ttsActiveControllers.delete(streamSid);
     this.ttsPlaying.delete(streamSid);
     this.ttsQueues.delete(streamSid);
+  }
+
+  private resolveQueuedTtsEntries(queue: TtsQueueEntry[]): void {
+    const pending = queue.splice(0);
+    for (const entry of pending) {
+      entry.controller.abort();
+      entry.resolve();
+    }
   }
 }
 

@@ -13,6 +13,8 @@ export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
   type ConfiguredBindingRouteResult,
+  resolveRuntimeConversationBindingRoute,
+  type RuntimeConversationBindingRouteResult,
 } from "../channels/plugins/binding-routing.js";
 export {
   primeConfiguredBindingRegistry,
@@ -42,9 +44,8 @@ export {
   resolveThreadBindingThreadName,
 } from "../channels/thread-bindings-messages.js";
 export {
-  DISCORD_THREAD_BINDING_CHANNEL,
-  MATRIX_THREAD_BINDING_CHANNEL,
   formatThreadBindingDisabledError,
+  formatThreadBindingSpawnDisabledError,
   resolveThreadBindingEffectiveExpiresAt,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -86,6 +87,7 @@ export {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+export { __testing } from "../infra/outbound/session-binding-service.js";
 export * from "../pairing/pairing-challenge.js";
 export { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 export * from "../pairing/pairing-messages.js";

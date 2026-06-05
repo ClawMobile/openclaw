@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveStateDir } from "../paths.js";
+import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
 function resolveAgentSessionsDir(
   agentId?: string,
@@ -61,7 +63,10 @@ export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
-  if (!SAFE_SESSION_ID_RE.test(trimmed)) {
+  if (
+    !SAFE_SESSION_ID_RE.test(trimmed) ||
+    isCompactionCheckpointTranscriptFileName(`${trimmed}.jsonl`)
+  ) {
     throw new Error(`Invalid session ID: ${sessionId}`);
   }
   return trimmed;
@@ -142,7 +147,7 @@ function resolveStructuralSessionFallbackPath(
     return undefined;
   }
   const normalizedAgentId = normalizeAgentId(agentIdPart);
-  if (normalizedAgentId !== agentIdPart.toLowerCase()) {
+  if (normalizedAgentId !== normalizeLowercaseStringOrEmpty(agentIdPart)) {
     return undefined;
   }
   if (normalizedAgentId !== normalizeAgentId(expectedAgentId)) {
@@ -274,6 +279,74 @@ export function resolveSessionFilePath(
     }
   }
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+}
+
+const GENERATED_UUID_SESSION_FILE_RE =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(-topic-.+)?\.jsonl$/i;
+
+function resolveGeneratedSessionFileSuffix(
+  previousSessionId: string,
+  previousSessionFile: string,
+): string | undefined {
+  const baseName = path.basename(previousSessionFile);
+  if (baseName === `${previousSessionId}.jsonl`) {
+    return ".jsonl";
+  }
+  const topicPrefix = `${previousSessionId}-topic-`;
+  if (baseName.startsWith(topicPrefix) && baseName.endsWith(".jsonl")) {
+    return baseName.slice(previousSessionId.length);
+  }
+  const generatedUuidMatch = GENERATED_UUID_SESSION_FILE_RE.exec(baseName);
+  if (generatedUuidMatch) {
+    return `${generatedUuidMatch[2] ?? ""}.jsonl`;
+  }
+  return undefined;
+}
+
+export function resolveRotatedGeneratedSessionFilePath(params: {
+  previousSessionId: string;
+  nextSessionId: string;
+  previousSessionFile?: string;
+  sessionsDir: string;
+  agentId?: string;
+}): string | undefined {
+  const previousSessionFile = params.previousSessionFile?.trim();
+  if (!previousSessionFile || params.previousSessionId === params.nextSessionId) {
+    return undefined;
+  }
+  try {
+    resolvePathWithinSessionsDir(params.sessionsDir, previousSessionFile, {
+      agentId: params.agentId,
+    });
+  } catch {
+    if (!path.isAbsolute(previousSessionFile)) {
+      return undefined;
+    }
+    const relative = path.relative(
+      path.resolve(params.sessionsDir),
+      path.resolve(previousSessionFile),
+    );
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      return undefined;
+    }
+  }
+
+  const generatedSuffix = resolveGeneratedSessionFileSuffix(
+    params.previousSessionId,
+    previousSessionFile,
+  );
+  if (!generatedSuffix) {
+    return undefined;
+  }
+  const nextFileName = `${params.nextSessionId}${generatedSuffix}`;
+
+  try {
+    return resolvePathWithinSessionsDir(params.sessionsDir, nextFileName, {
+      agentId: params.agentId,
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 export function resolveStorePath(

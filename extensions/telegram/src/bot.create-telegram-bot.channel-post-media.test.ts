@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
+import { useFrozenTime, useRealTime } from "openclaw/plugin-sdk/test-env";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const {
@@ -10,19 +10,12 @@ const {
   telegramBotDepsForTest,
   telegramBotRuntimeForTest,
 } = harness;
+const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot-core.js");
 
-const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-  await import("./bot.js");
-
-setTelegramBotRuntimeForTest(
-  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-);
-
-const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
-  createTelegramBotBase({
-    ...opts,
-    telegramDeps: telegramBotDepsForTest,
-  });
+let createTelegramBot: (
+  opts: import("./bot.types.js").TelegramBotOptions,
+) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
 
 const loadConfig = getLoadConfigMock();
 
@@ -52,9 +45,18 @@ function getChannelPostHandler() {
   return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
+function getChannelPostHandlerWithRuntimeTimings() {
+  createTelegramBot({ token: "tok" });
+  return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
+}
+
 function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
+  return resolveFlushTimerForDelay(setTimeoutSpy, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+}
+
+function resolveFlushTimerForDelay(setTimeoutSpy: ReturnType<typeof vi.spyOn>, delayMs: number) {
   const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
-    (call: Parameters<typeof setTimeout>) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+    (call: Parameters<typeof setTimeout>) => call[1] === delayMs,
   );
   const flushTimer =
     flushTimerCallIndex >= 0
@@ -68,57 +70,167 @@ function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
   return flushTimer;
 }
 
+function createImageFetchSpy(params?: { body?: Uint8Array; contentType?: string }) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(
+    async () =>
+      new Response(Buffer.from(params?.body ?? [0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { "content-type": params?.contentType ?? "image/png" },
+      }),
+  );
+}
+
+function createChannelPostContext(params: {
+  messageId: number;
+  date: number;
+  title?: string;
+  caption?: string;
+  text?: string;
+  mediaGroupId?: string;
+  photoFileId?: string;
+  getFileResult?: Record<string, unknown>;
+}) {
+  const photoFileId = params.photoFileId;
+  return {
+    channelPost: {
+      chat: { id: -100777111222, type: "channel", title: params.title ?? "Wake Channel" },
+      message_id: params.messageId,
+      date: params.date,
+      ...(params.caption ? { caption: params.caption } : {}),
+      ...(params.text ? { text: params.text } : {}),
+      ...(params.mediaGroupId ? { media_group_id: params.mediaGroupId } : {}),
+      ...(photoFileId ? { photo: [{ file_id: photoFileId }] } : {}),
+    },
+    me: { username: "openclaw_bot" },
+    getFile: async () =>
+      params.getFileResult ?? (photoFileId ? { file_path: `photos/${photoFileId}.jpg` } : {}),
+  };
+}
+
+async function flushChannelPostMediaGroup(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
+  const flushTimer = resolveFlushTimer(setTimeoutSpy);
+  expect(flushTimer).toBeTypeOf("function");
+  await flushTimer?.();
+}
+
+async function flushChannelPostMediaGroupForDelay(
+  setTimeoutSpy: ReturnType<typeof vi.spyOn>,
+  delayMs: number,
+) {
+  const flushTimer = resolveFlushTimerForDelay(setTimeoutSpy, delayMs);
+  expect(flushTimer).toBeTypeOf("function");
+  await flushTimer?.();
+}
+
+async function queueChannelPostAlbum(
+  handler: ReturnType<typeof getChannelPostHandler>,
+  params: {
+    caption: string;
+    mediaGroupId: string;
+    firstMessageId: number;
+    secondMessageId: number;
+    firstPhotoFileId?: string;
+    secondPhotoFileId?: string;
+    secondGetFileResult?: Record<string, unknown>;
+  },
+) {
+  const first = handler(
+    createChannelPostContext({
+      messageId: params.firstMessageId,
+      caption: params.caption,
+      date: 1736380800,
+      mediaGroupId: params.mediaGroupId,
+      photoFileId: params.firstPhotoFileId ?? "p1",
+    }),
+  );
+  const second = handler(
+    createChannelPostContext({
+      messageId: params.secondMessageId,
+      date: 1736380801,
+      mediaGroupId: params.mediaGroupId,
+      photoFileId: params.secondPhotoFileId ?? "p2",
+      getFileResult: params.secondGetFileResult,
+    }),
+  );
+  await Promise.all([first, second]);
+}
+
 describe("createTelegramBot channel_post media", () => {
+  beforeAll(() => {
+    createTelegramBot = (opts) =>
+      createTelegramBotBase({
+        ...opts,
+        telegramDeps: telegramBotDepsForTest,
+      });
+    setTelegramBotRuntimeForTest(
+      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+    );
+  });
+
+  beforeEach(() => {
+    setTelegramBotRuntimeForTest(
+      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+    );
+  });
+
   it("buffers channel_post media groups and processes them together", async () => {
     setOpenChannelPostConfig();
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-    );
+    const fetchSpy = createImageFetchSpy();
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const handler = getChannelPostHandler();
-
-      const first = handler({
-        channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
-          message_id: 201,
-          caption: "album caption",
-          date: 1736380800,
-          media_group_id: "channel-album-1",
-          photo: [{ file_id: "p1" }],
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      await queueChannelPostAlbum(handler, {
+        caption: "album caption",
+        mediaGroupId: "channel-album-1",
+        firstMessageId: 201,
+        secondMessageId: 202,
       });
-
-      const second = handler({
-        channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
-          message_id: 202,
-          date: 1736380801,
-          media_group_id: "channel-album-1",
-          photo: [{ file_id: "p2" }],
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "photos/p2.jpg" }),
-      });
-
-      await Promise.all([first, second]);
       expect(replySpy).not.toHaveBeenCalled();
-
-      const flushTimer = resolveFlushTimer(setTimeoutSpy);
-      expect(flushTimer).toBeTypeOf("function");
-      await flushTimer?.();
+      await flushChannelPostMediaGroup(setTimeoutSpy);
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0]?.[0] as { Body?: string };
       expect(payload.Body).toContain("album caption");
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("honors configured mediaGroupFlushMs for channel_post albums", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          mediaGroupFlushMs: 75,
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    const fetchSpy = createImageFetchSpy();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const handler = getChannelPostHandlerWithRuntimeTimings();
+      await queueChannelPostAlbum(handler, {
+        caption: "configured album",
+        mediaGroupId: "channel-album-configured",
+        firstMessageId: 211,
+        secondMessageId: 212,
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+      await flushChannelPostMediaGroupForDelay(setTimeoutSpy, 75);
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      expect(payload.Body).toContain("configured album");
     } finally {
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();
@@ -172,27 +284,21 @@ describe("createTelegramBot channel_post media", () => {
   it("drops oversized channel_post media instead of dispatching a placeholder message", async () => {
     setOpenChannelPostConfig();
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }),
-    );
+    const fetchSpy = createImageFetchSpy({
+      body: new Uint8Array([0xff, 0xd8, 0xff, 0x00]),
+      contentType: "image/jpeg",
+    });
 
     createTelegramBot({ token: "tok", mediaMaxMb: 0 });
     const handler = getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 
-    await handler({
-      channelPost: {
-        chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
-        message_id: 401,
+    await handler(
+      createChannelPostContext({
+        messageId: 401,
         date: 1736380800,
-        photo: [{ file_id: "oversized" }],
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ file_path: "photos/oversized.jpg" }),
-    });
+        photoFileId: "oversized",
+      }),
+    );
 
     expect(replySpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
@@ -206,11 +312,9 @@ describe("createTelegramBot channel_post media", () => {
     });
     sendMessageSpy.mockClear();
     replySpy.mockClear();
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async () =>
-        Promise.reject(new Error("MediaFetchError: Failed to fetch media")),
-      );
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("MediaFetchError: Failed to fetch media");
+    });
 
     try {
       createTelegramBot({ token: "tok" });
@@ -263,38 +367,14 @@ describe("createTelegramBot channel_post media", () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const handler = getChannelPostHandler();
-
-      const first = handler({
-        channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
-          message_id: 401,
-          caption: "partial album",
-          date: 1736380800,
-          media_group_id: "partial-album-1",
-          photo: [{ file_id: "p1" }],
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      await queueChannelPostAlbum(handler, {
+        caption: "partial album",
+        mediaGroupId: "partial-album-1",
+        firstMessageId: 401,
+        secondMessageId: 402,
       });
-
-      const second = handler({
-        channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
-          message_id: 402,
-          date: 1736380801,
-          media_group_id: "partial-album-1",
-          photo: [{ file_id: "p2" }],
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "photos/p2.jpg" }),
-      });
-
-      await Promise.all([first, second]);
       expect(replySpy).not.toHaveBeenCalled();
-
-      const flushTimer = resolveFlushTimer(setTimeoutSpy);
-      expect(flushTimer).toBeTypeOf("function");
-      await flushTimer?.();
+      await flushChannelPostMediaGroup(setTimeoutSpy);
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0]?.[0] as { Body?: string };
@@ -309,49 +389,20 @@ describe("createTelegramBot channel_post media", () => {
     replySpy.mockReset();
     setOpenChannelPostConfig();
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-    );
+    const fetchSpy = createImageFetchSpy();
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const handler = getChannelPostHandler();
-
-      const first = handler({
-        channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
-          message_id: 501,
-          caption: "fatal album",
-          date: 1736380800,
-          media_group_id: "fatal-album-1",
-          photo: [{ file_id: "p1" }],
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      await queueChannelPostAlbum(handler, {
+        caption: "fatal album",
+        mediaGroupId: "fatal-album-1",
+        firstMessageId: 501,
+        secondMessageId: 502,
+        secondGetFileResult: {},
       });
-
-      const second = handler({
-        channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
-          message_id: 502,
-          date: 1736380801,
-          media_group_id: "fatal-album-1",
-          photo: [{ file_id: "p2" }],
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
-      });
-
-      await Promise.all([first, second]);
       expect(replySpy).not.toHaveBeenCalled();
-
-      const flushTimer = resolveFlushTimer(setTimeoutSpy);
-      expect(flushTimer).toBeTypeOf("function");
-      await flushTimer?.();
+      await flushChannelPostMediaGroup(setTimeoutSpy);
 
       expect(replySpy).not.toHaveBeenCalled();
     } finally {

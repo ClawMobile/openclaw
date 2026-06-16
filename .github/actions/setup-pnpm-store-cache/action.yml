@@ -9,6 +9,10 @@ inputs:
     description: Suffix appended to the cache key.
     required: false
     default: "node24"
+  use-sticky-disk:
+    description: Compatibility input for workflows shared with Blacksmith-backed repos. This action always uses actions/cache.
+    required: false
+    default: "false"
   use-restore-keys:
     description: Whether to use restore-keys fallback for actions/cache.
     required: false

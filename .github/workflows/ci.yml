@@ -23,7 +23,7 @@ jobs:
   # conservative defaults that keep heavy lanes enabled.
   preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.docs_scope.outputs.docs_only }}
@@ -163,7 +163,7 @@ jobs:
   build-artifacts:
     needs: [preflight]
     if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -198,7 +198,7 @@ jobs:
   release-check:
     needs: [preflight, build-artifacts]
     if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -224,7 +224,7 @@ jobs:
   checks:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -320,7 +320,7 @@ jobs:
     name: "extension-fast"
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && needs.preflight.outputs.has_changed_extensions == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -347,7 +347,7 @@ jobs:
     name: "check"
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -371,7 +371,7 @@ jobs:
     name: "check-additional"
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -469,7 +469,7 @@ jobs:
     name: "build-smoke"
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -510,7 +510,7 @@ jobs:
   check-docs:
     needs: [preflight]
     if: needs.preflight.outputs.docs_changed == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -530,7 +530,7 @@ jobs:
   skills-python:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.preflight.outputs.run_skills_python == 'true')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -557,7 +557,7 @@ jobs:
   checks-windows:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_windows == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
-    runs-on: blacksmith-32vcpu-windows-2025
+    runs-on: windows-2025
     timeout-minutes: 20
     env:
       NODE_OPTIONS: --max-old-space-size=6144
@@ -774,7 +774,7 @@ jobs:
   android:
     needs: [preflight]
     if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_android == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false

@@ -104,10 +104,14 @@ import {
   sanitizeCodexToolResponse,
 } from "./tool-progress-normalization.js";
 import {
+  type CodexTrajectoryToolCallSummary,
   createCodexTrajectoryRecorder,
   normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
+  recordCodexTrajectoryModelRequest,
+  recordCodexTrajectoryModelResponse,
+  recordCodexTrajectoryModelStepStarted,
 } from "./trajectory.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
@@ -550,8 +554,14 @@ export async function runCodexAppServerAttempt(
     cwd: effectiveWorkspace,
     developerInstructions: promptBuild.developerInstructions,
     prompt: promptBuild.prompt,
+    historyMessages,
     tools: toolBridge.specs,
   });
+  const trajectoryModelStepId = `${params.runId}:model-step-1`;
+  const trajectoryToolCalls: CodexTrajectoryToolCallSummary[] = [];
+  let trajectoryModelStepStartedAtMs: number | undefined;
+  let trajectoryToolLatencyMs = 0;
+  let trajectoryToolCallCount = 0;
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadBinding;
   let trajectoryEndRecorded = false;
@@ -680,13 +690,16 @@ export async function runCodexAppServerAttempt(
     threadId: thread.threadId,
     authProfileId: startupAuthProfileId,
     workspaceDir: effectiveWorkspace,
+    userInstruction: params.prompt,
     toolCount: toolBridge.specs.length,
+    startedAtMs: attemptStartedAt,
   });
   recordCodexTrajectoryContext(trajectoryRecorder, {
     attempt: params,
     cwd: effectiveWorkspace,
     developerInstructions: promptBuild.developerInstructions,
     prompt: promptBuild.prompt,
+    historyMessages,
     tools: toolBridge.specs,
   });
 
@@ -970,12 +983,21 @@ export async function runCodexAppServerAttempt(
         return undefined;
       }
       armCompletionWatchOnResponse = true;
+      const toolStartedAtMs = Date.now();
+      const toolCallSummary = {
+        toolCallId: call.callId,
+        name: call.tool,
+        arguments: call.arguments,
+      };
+      trajectoryToolCalls.push(toolCallSummary);
       trajectoryRecorder?.recordEvent("tool.call", {
+        stepId: trajectoryModelStepId,
         threadId: call.threadId,
         turnId: call.turnId,
         toolCallId: call.callId,
         name: call.tool,
         arguments: call.arguments,
+        startedAtMs: toolStartedAtMs,
       });
       const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
       const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
@@ -997,6 +1019,7 @@ export async function runCodexAppServerAttempt(
         timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
         onTimeout: () => {
           trajectoryRecorder?.recordEvent("tool.timeout", {
+            stepId: trajectoryModelStepId,
             threadId: call.threadId,
             turnId: call.turnId,
             toolCallId: call.callId,
@@ -1005,12 +1028,17 @@ export async function runCodexAppServerAttempt(
           });
         },
       });
+      const toolLatencyMs = Math.max(0, Date.now() - toolStartedAtMs);
+      trajectoryToolCallCount += 1;
+      trajectoryToolLatencyMs += toolLatencyMs;
       trajectoryRecorder?.recordEvent("tool.result", {
+        stepId: trajectoryModelStepId,
         threadId: call.threadId,
         turnId: call.turnId,
         toolCallId: call.callId,
         name: call.tool,
         success: response.success,
+        latencyMs: toolLatencyMs,
         contentItems: response.contentItems,
       });
       emitCodexAppServerEvent(params, {
@@ -1061,17 +1089,35 @@ export async function runCodexAppServerAttempt(
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_starting", threadId: thread.threadId },
     });
+    const turnStartParams = buildTurnStartParams(params, {
+      threadId: thread.threadId,
+      cwd: effectiveWorkspace,
+      appServer,
+      promptText: promptBuild.prompt,
+    });
+    trajectoryModelStepStartedAtMs = Date.now();
+    recordCodexTrajectoryModelStepStarted(trajectoryRecorder, {
+      stepId: trajectoryModelStepId,
+      threadId: thread.threadId,
+      provider: params.provider,
+      model: params.modelId,
+      startedAtMs: trajectoryModelStepStartedAtMs,
+    });
+    recordCodexTrajectoryModelRequest(trajectoryRecorder, {
+      stepId: trajectoryModelStepId,
+      threadId: thread.threadId,
+      systemPrompt: promptBuild.developerInstructions,
+      prompt: promptBuild.prompt,
+      historyMessages,
+      imagesCount: params.images?.length ?? 0,
+      tools: toolBridge.specs,
+      runtimeRequest: turnStartParams,
+    });
     turn = assertCodexTurnStartResponse(
-      await client.request(
-        "turn/start",
-        buildTurnStartParams(params, {
-          threadId: thread.threadId,
-          cwd: effectiveWorkspace,
-          appServer,
-          promptText: promptBuild.prompt,
-        }),
-        { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
-      ),
+      await client.request("turn/start", turnStartParams, {
+        timeoutMs: params.timeoutMs,
+        signal: runAbortController.signal,
+      }),
     );
   } catch (error) {
     const usageLimitError = formatCodexTurnStartUsageLimitError(error, pendingNotifications);
@@ -1083,9 +1129,13 @@ export async function runCodexAppServerAttempt(
     trajectoryRecorder?.recordEvent("session.ended", {
       status: "error",
       threadId: thread.threadId,
+      stepId: trajectoryModelStepId,
       timedOut,
       aborted: runAbortController.signal.aborted,
       promptError: turnStartErrorMessage,
+      e2eLatencyMs: Date.now() - attemptStartedAt,
+      toolLatencyMs: trajectoryToolLatencyMs,
+      toolCallCount: trajectoryToolCallCount,
     });
     trajectoryEndRecorded = true;
     runAgentHarnessLlmOutputHook({
@@ -1223,13 +1273,53 @@ export async function runCodexAppServerAttempt(
       timedOut,
       yieldDetected,
     });
+    const modelStepRuntimeLatencyMs =
+      typeof trajectoryModelStepStartedAtMs === "number"
+        ? Math.max(0, Date.now() - trajectoryModelStepStartedAtMs)
+        : undefined;
+    const observedModelAndRuntimeLatencyMs =
+      typeof modelStepRuntimeLatencyMs === "number"
+        ? Math.max(0, modelStepRuntimeLatencyMs - trajectoryToolLatencyMs)
+        : undefined;
+    recordCodexTrajectoryModelResponse(trajectoryRecorder, {
+      stepId: trajectoryModelStepId,
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      result,
+      timedOut,
+      aborted: finalAborted,
+      promptError: finalPromptError,
+      ...(typeof modelStepRuntimeLatencyMs === "number"
+        ? { runtimeLatencyMs: modelStepRuntimeLatencyMs }
+        : {}),
+      ...(typeof observedModelAndRuntimeLatencyMs === "number"
+        ? { modelAndRuntimeLatencyMs: observedModelAndRuntimeLatencyMs }
+        : {}),
+      toolCalls: trajectoryToolCalls,
+      yieldDetected,
+    });
+    const e2eLatencyMs = Date.now() - attemptStartedAt;
+    const overheadLatencyMs =
+      typeof observedModelAndRuntimeLatencyMs === "number"
+        ? Math.max(0, e2eLatencyMs - observedModelAndRuntimeLatencyMs - trajectoryToolLatencyMs)
+        : undefined;
     trajectoryRecorder?.recordEvent("session.ended", {
       status: finalPromptError ? "error" : finalAborted || timedOut ? "interrupted" : "success",
+      stepId: trajectoryModelStepId,
       threadId: thread.threadId,
       turnId: activeTurnId,
       timedOut,
       yieldDetected,
+      aborted: finalAborted,
       promptError: normalizeCodexTrajectoryError(finalPromptError),
+      finalAssistantText: collectTerminalAssistantText(result),
+      e2eLatencyMs,
+      modelLatencyMs: null,
+      modelAndRuntimeLatencyMs: observedModelAndRuntimeLatencyMs,
+      toolLatencyMs: trajectoryToolLatencyMs,
+      overheadLatencyMs,
+      toolCallCount: trajectoryToolCallCount,
+      modelStepCount: 1,
     });
     trajectoryEndRecorded = true;
     await mirrorTranscriptBestEffort({
@@ -1327,10 +1417,14 @@ export async function runCodexAppServerAttempt(
     if (trajectoryRecorder && !trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
         status: timedOut || runAbortController.signal.aborted ? "interrupted" : "cleanup",
+        stepId: trajectoryModelStepId,
         threadId: thread.threadId,
         turnId: activeTurnId,
         timedOut,
         aborted: runAbortController.signal.aborted,
+        e2eLatencyMs: Date.now() - attemptStartedAt,
+        toolLatencyMs: trajectoryToolLatencyMs,
+        toolCallCount: trajectoryToolCallCount,
       });
     }
     await runAgentCleanupStep({

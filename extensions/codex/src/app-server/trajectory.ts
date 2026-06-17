@@ -18,8 +18,15 @@ type CodexTrajectoryInit = {
   cwd: string;
   developerInstructions?: string;
   prompt?: string;
+  historyMessages?: unknown[];
   tools?: Array<{ name?: string; description?: string; inputSchema?: unknown }>;
   env?: NodeJS.ProcessEnv;
+};
+
+export type CodexTrajectoryToolCallSummary = {
+  toolCallId: string;
+  name: string;
+  arguments?: unknown;
 };
 
 const SENSITIVE_FIELD_RE = /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
@@ -275,10 +282,121 @@ export function recordCodexTrajectoryContext(
     return;
   }
   recorder.recordEvent("context.compiled", {
+    captureLevel: "openclaw-runtime-request",
     systemPrompt: params.developerInstructions,
     prompt: params.prompt ?? params.attempt.prompt,
+    historyMessages: params.historyMessages,
     imagesCount: params.attempt.images?.length ?? 0,
     tools: toTrajectoryToolDefinitions(params.tools),
+  });
+}
+
+export function recordCodexTrajectoryModelStepStarted(
+  recorder: CodexTrajectoryRecorder | null,
+  params: {
+    stepId: string;
+    threadId: string;
+    turnId?: string;
+    provider: string;
+    model: string;
+    startedAtMs: number;
+  },
+): void {
+  if (!recorder) {
+    return;
+  }
+  recorder.recordEvent("model.step.started", {
+    stepId: params.stepId,
+    threadId: params.threadId,
+    turnId: params.turnId,
+    provider: params.provider,
+    model: params.model,
+    startedAtMs: params.startedAtMs,
+  });
+}
+
+export function recordCodexTrajectoryModelRequest(
+  recorder: CodexTrajectoryRecorder | null,
+  params: {
+    stepId: string;
+    threadId: string;
+    turnId?: string;
+    captureLevel?: string;
+    systemPrompt?: string;
+    prompt: string;
+    historyMessages?: unknown[];
+    imagesCount: number;
+    tools?: Array<{ name?: string; description?: string; inputSchema?: unknown }>;
+    runtimeRequest?: unknown;
+  },
+): void {
+  if (!recorder) {
+    return;
+  }
+  recorder.recordEvent("model.request", {
+    stepId: params.stepId,
+    threadId: params.threadId,
+    turnId: params.turnId,
+    captureLevel: params.captureLevel ?? "openclaw-runtime-request",
+    systemPrompt: params.systemPrompt,
+    prompt: params.prompt,
+    historyMessages: params.historyMessages,
+    imagesCount: params.imagesCount,
+    tools: toTrajectoryToolDefinitions(params.tools),
+    runtimeRequest: params.runtimeRequest,
+  });
+}
+
+export function recordCodexTrajectoryModelResponse(
+  recorder: CodexTrajectoryRecorder | null,
+  params: {
+    stepId: string;
+    threadId: string;
+    turnId: string;
+    result: EmbeddedRunAttemptResult;
+    timedOut: boolean;
+    aborted: boolean;
+    promptError: unknown;
+    runtimeLatencyMs?: number;
+    modelAndRuntimeLatencyMs?: number;
+    toolCalls: CodexTrajectoryToolCallSummary[];
+    yieldDetected?: boolean;
+  },
+): void {
+  if (!recorder) {
+    return;
+  }
+  const promptError = normalizeCodexTrajectoryError(params.promptError);
+  const latencyMs = params.modelAndRuntimeLatencyMs ?? params.runtimeLatencyMs;
+  const latencyKind =
+    typeof params.modelAndRuntimeLatencyMs === "number"
+      ? "model-and-runtime-minus-tools"
+      : typeof params.runtimeLatencyMs === "number"
+        ? "openclaw-runtime"
+        : undefined;
+  recorder.recordEvent("model.response", {
+    stepId: params.stepId,
+    threadId: params.threadId,
+    turnId: params.turnId,
+    captureLevel: "openclaw-runtime-result",
+    status: promptError ? "error" : params.aborted || params.timedOut ? "interrupted" : "success",
+    latencyMs,
+    latencyKind,
+    runtimeLatencyMs: params.runtimeLatencyMs,
+    modelAndRuntimeLatencyMs: params.modelAndRuntimeLatencyMs,
+    timedOut: params.timedOut,
+    yieldDetected: params.yieldDetected ?? false,
+    aborted: params.aborted,
+    promptError,
+    assistantText: params.result.assistantTexts.join("\n\n"),
+    assistantTexts: params.result.assistantTexts,
+    toolCalls: params.toolCalls,
+    usage: toTrajectoryUsage(params.result.attemptUsage),
+    rawResponse: {
+      messagesSnapshot: params.result.messagesSnapshot,
+      promptCache: params.result.promptCache,
+      clientToolCalls: params.result.clientToolCalls,
+    },
   });
 }
 
@@ -303,7 +421,7 @@ export function recordCodexTrajectoryCompletion(
     yieldDetected: params.yieldDetected ?? false,
     aborted: params.result.aborted,
     promptError: normalizeCodexTrajectoryError(params.result.promptError),
-    usage: params.result.attemptUsage,
+    usage: toTrajectoryUsage(params.result.attemptUsage),
     assistantTexts: params.result.assistantTexts,
     messagesSnapshot: params.result.messagesSnapshot,
   });
@@ -373,6 +491,19 @@ function toTrajectoryToolDefinitions(
       ];
     })
     .toSorted((left, right) => left.name.localeCompare(right.name));
+}
+
+function toTrajectoryUsage(usage: EmbeddedRunAttemptResult["attemptUsage"]): unknown {
+  if (!usage) {
+    return undefined;
+  }
+  return {
+    inputTokens: usage.input,
+    outputTokens: usage.output,
+    totalTokens: usage.total,
+    cachedInputTokens: usage.cacheRead,
+    raw: usage,
+  };
 }
 
 function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {

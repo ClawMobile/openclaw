@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCodexTrajectoryRecorder,
+  recordCodexTrajectoryContext,
+  recordCodexTrajectoryModelRequest,
+  recordCodexTrajectoryModelResponse,
+  recordCodexTrajectoryModelStepStarted,
   resolveCodexTrajectoryAppendFlags,
   resolveCodexTrajectoryPointerFlags,
 } from "./trajectory.js";
@@ -14,6 +18,16 @@ function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-trajectory-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function readTrajectoryEvents(
+  filePath: string,
+): Array<{ type: string; data?: Record<string, unknown> }> {
+  return fs
+    .readFileSync(filePath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { type: string; data?: Record<string, unknown> });
 }
 
 afterEach(() => {
@@ -150,6 +164,99 @@ describe("Codex trajectory recorder", () => {
     expect(parsed.data).toMatchObject({
       truncated: true,
       reason: "trajectory-event-size-limit",
+    });
+  });
+
+  it("records model step request and response even without tool calls", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const attempt = {
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      provider: "codex",
+      modelId: "gpt-5.4",
+      model: { api: "responses" },
+      prompt: "current task",
+      images: [],
+    } as never;
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt,
+      env: {},
+    });
+
+    recordCodexTrajectoryContext(recorder, {
+      cwd: tmpDir,
+      attempt,
+      developerInstructions: "system instructions",
+      prompt: "current task",
+      historyMessages: [{ role: "user", content: "previous task" }],
+      tools: [{ name: "shell.exec", inputSchema: { type: "object" } }],
+    });
+    recordCodexTrajectoryModelStepStarted(recorder, {
+      stepId: "step-1",
+      threadId: "thread-1",
+      provider: "codex",
+      model: "gpt-5.4",
+      startedAtMs: 100,
+    });
+    recordCodexTrajectoryModelRequest(recorder, {
+      stepId: "step-1",
+      threadId: "thread-1",
+      systemPrompt: "system instructions",
+      prompt: "current task",
+      historyMessages: [{ role: "user", content: "previous task" }],
+      imagesCount: 0,
+      tools: [{ name: "shell.exec", inputSchema: { type: "object" } }],
+      runtimeRequest: { input: [{ type: "text", text: "current task" }] },
+    });
+    recordCodexTrajectoryModelResponse(recorder, {
+      stepId: "step-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      timedOut: false,
+      aborted: false,
+      promptError: null,
+      runtimeLatencyMs: 25,
+      modelAndRuntimeLatencyMs: 25,
+      toolCalls: [],
+      result: {
+        aborted: false,
+        promptError: null,
+        messagesSnapshot: [],
+        assistantTexts: ["final answer"],
+        attemptUsage: { input: 10, output: 5, total: 15, cacheRead: 3 },
+      } as never,
+    });
+    await recorder?.flush();
+
+    const events = readTrajectoryEvents(path.join(tmpDir, "session.trajectory.jsonl"));
+    expect(events.map((event) => event.type)).toEqual([
+      "context.compiled",
+      "model.step.started",
+      "model.request",
+      "model.response",
+    ]);
+    expect(events[0]?.data).toMatchObject({
+      captureLevel: "openclaw-runtime-request",
+      prompt: "current task",
+      historyMessages: [{ role: "user", content: "previous task" }],
+    });
+    expect(events[3]?.data).toMatchObject({
+      stepId: "step-1",
+      status: "success",
+      latencyMs: 25,
+      latencyKind: "model-and-runtime-minus-tools",
+      assistantText: "final answer",
+      toolCalls: [],
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        cachedInputTokens: 3,
+      },
     });
   });
 });

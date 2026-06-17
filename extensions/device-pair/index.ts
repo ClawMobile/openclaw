@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -649,9 +650,9 @@ async function listRecentTraceMatches(limit = 5): Promise<TraceFileMatch[]> {
   const matches: TraceFileMatch[] = [];
 
   for (const rootPath of roots) {
-    let entries: Awaited<ReturnType<typeof readdir>>;
+    let entries: Dirent<string>[];
     try {
-      entries = await readdir(rootPath, { withFileTypes: true });
+      entries = await readdir(rootPath, { withFileTypes: true, encoding: "utf8" });
     } catch {
       continue;
     }
@@ -677,9 +678,7 @@ async function listRecentTraceMatches(limit = 5): Promise<TraceFileMatch[]> {
     }
   }
 
-  return matches
-    .toSorted((a, b) => b.modifiedAtMs - a.modifiedAtMs)
-    .slice(0, Math.max(1, limit));
+  return matches.toSorted((a, b) => b.modifiedAtMs - a.modifiedAtMs).slice(0, Math.max(1, limit));
 }
 
 async function findExactTraceByTrajectoryId(trajectoryId: string): Promise<TraceFileMatch[]> {

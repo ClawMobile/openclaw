@@ -1164,6 +1164,22 @@ describe("message tool reasoning tag sanitization", () => {
     },
   );
 
+  it("formats outgoing send text after sanitizing reasoning tags", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        message: "<think>internal plan</think>Hello!",
+      },
+      toolOptions: {
+        formatOutgoingText: (text) => `[Time: 1.23 s]\n\n${text}`,
+      },
+    });
+
+    expect(call?.params?.message).toBe("[Time: 1.23 s]\n\nHello!");
+  });
+
   it("sanitizes visible presentation text before sending", async () => {
     mockSendResult({ channel: "slack", to: "slack:C123" });
 

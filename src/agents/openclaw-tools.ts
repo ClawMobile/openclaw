@@ -324,6 +324,8 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
+    /** Optional formatter applied to outgoing text sent through the message tool. */
+    formatMessageToolText?: (text: string) => string;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
     enableHeartbeatTool?: boolean;
     /** If true, skip plugin tool resolution and return only shipped core tools. */
@@ -500,6 +502,7 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
+        formatOutgoingText: options?.formatMessageToolText,
       });
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");

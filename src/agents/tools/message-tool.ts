@@ -41,6 +41,8 @@ const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
   "thread-reply",
   "broadcast",
 ]);
+const TEXT_SENDING_ACTIONS = EXPLICIT_TARGET_ACTIONS;
+const TEXT_MESSAGE_FIELDS = ["text", "content", "message", "caption"] as const;
 
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return EXPLICIT_TARGET_ACTIONS.has(action);
@@ -520,6 +522,7 @@ type MessageToolOptions = {
   requireExplicitTarget?: boolean;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  formatOutgoingText?: (text: string) => string;
 };
 
 type MessageToolDiscoveryParams = {
@@ -759,7 +762,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       // Strip reasoning tags from text fields — models may include <think>…</think>
       // in tool arguments, and the messaging tool send path has no other tag filtering.
-      for (const field of ["text", "content", "message", "caption"]) {
+      for (const field of TEXT_MESSAGE_FIELDS) {
         if (typeof params[field] === "string") {
           params[field] = stripFormattedReasoningMessage(params[field]);
         }
@@ -769,6 +772,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      if (options?.formatOutgoingText && TEXT_SENDING_ACTIONS.has(action)) {
+        for (const field of TEXT_MESSAGE_FIELDS) {
+          if (typeof params[field] === "string" && params[field].trim()) {
+            params[field] = options.formatOutgoingText(params[field]);
+          }
+        }
+      }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =

@@ -771,6 +771,8 @@ export async function runEmbeddedAttempt(
       ...diagnosticRunBase,
     });
     const diagnosticRunStartedAt = Date.now();
+    const formatElapsedReplyText = (text: string) =>
+      `[Time: ${(Math.max(0, Date.now() - diagnosticRunStartedAt) / 1000).toFixed(2)} s]\n\n${text}`;
     let diagnosticRunCompleted = false;
     emitDiagnosticRunCompleted = (outcome, err) => {
       if (diagnosticRunCompleted) {
@@ -857,6 +859,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             disableMessageTool: params.disableMessageTool,
+            formatMessageToolText: formatElapsedReplyText,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
             forceHeartbeatTool: params.forceHeartbeatTool,

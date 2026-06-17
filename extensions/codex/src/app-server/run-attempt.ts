@@ -172,11 +172,6 @@ function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string 
   return result.assistantTexts.join("\n\n").trim();
 }
 
-function formatTimedAssistantText(text: string, durationMs: number): string {
-  const durationSeconds = Math.max(0, durationMs) / 1000;
-  return `[Time: ${durationSeconds.toFixed(2)} s]\n\n${text}`;
-}
-
 type CodexSteeringQueueOptions = {
   steeringMode?: "all" | "one-at-a-time";
   debounceMs?: number;
@@ -1327,11 +1322,6 @@ export async function runCodexAppServerAttempt(
       modelStepCount: 1,
     });
     trajectoryEndRecorded = true;
-    const terminalAssistantText = collectTerminalAssistantText(result);
-    const timedTerminalAssistantText =
-      terminalAssistantText && !finalAborted && !finalPromptError
-        ? formatTimedAssistantText(terminalAssistantText, e2eLatencyMs)
-        : terminalAssistantText;
     await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
@@ -1340,10 +1330,11 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
-    if (timedTerminalAssistantText && !finalAborted && !finalPromptError) {
+    const terminalAssistantText = collectTerminalAssistantText(result);
+    if (terminalAssistantText && !finalAborted && !finalPromptError) {
       emitCodexAppServerEvent(params, {
         stream: "assistant",
-        data: { text: timedTerminalAssistantText },
+        data: { text: terminalAssistantText },
       });
     }
     if (finalPromptError) {
@@ -1413,10 +1404,6 @@ export async function runCodexAppServerAttempt(
     });
     return {
       ...result,
-      assistantTexts:
-        timedTerminalAssistantText && !finalAborted && !finalPromptError
-          ? [timedTerminalAssistantText]
-          : result.assistantTexts,
       timedOut,
       aborted: finalAborted,
       promptError: finalPromptError,
@@ -2124,7 +2111,6 @@ export const __testing = {
   buildDynamicTools,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
-  formatTimedAssistantText,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {
     clientFactory = factory;
   }),

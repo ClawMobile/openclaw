@@ -1017,8 +1017,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
-    const timedReplyPattern = /^\[Time: \d+\.\d{2} s\]\n\nhello back$/u;
-    expect(result.assistantTexts).toEqual([expect.stringMatching(timedReplyPattern)]);
+    expect(result.assistantTexts).toEqual(["hello back"]);
     await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
@@ -1033,7 +1032,7 @@ describe("runCodexAppServerAttempt", () => {
         },
         {
           stream: "assistant",
-          data: { text: expect.stringMatching(timedReplyPattern) },
+          data: { text: "hello back" },
         },
         {
           stream: "lifecycle",
@@ -1061,7 +1060,7 @@ describe("runCodexAppServerAttempt", () => {
           runId: "run-1",
           sessionKey: "agent:main:session-1",
           stream: "assistant",
-          data: { text: expect.stringMatching(timedReplyPattern) },
+          data: { text: "hello back" },
         }),
         expect.objectContaining({
           runId: "run-1",
@@ -2053,7 +2052,7 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
     expect(result).toMatchObject({
-      assistantTexts: [expect.stringMatching(/^\[Time: \d+\.\d{2} s\]\n\ndone from response$/u)],
+      assistantTexts: ["done from response"],
       aborted: false,
       timedOut: false,
     });
@@ -2096,7 +2095,7 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     await expect(run).resolves.toMatchObject({
-      assistantTexts: [expect.stringMatching(/^\[Time: \d+\.\d{2} s\]\n\nfinal completion$/u)],
+      assistantTexts: ["final completion"],
       aborted: false,
       timedOut: false,
     });

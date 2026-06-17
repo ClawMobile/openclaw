@@ -356,7 +356,10 @@ describe("registerTelegramNativeCommands", () => {
         api: { sendDocument },
       });
       registerTelegramNativeCommands({
-        ...createNativeCommandTestParams({}, { bot: botHarness.bot }),
+        ...createNativeCommandTestParams(
+          {},
+          { bot: botHarness.bot, allowFrom: ["200"], telegramCfg: { allowFrom: ["200"] } },
+        ),
       });
 
       const handler = botHarness.commandHandlers.get("trace");
@@ -427,7 +430,10 @@ describe("registerTelegramNativeCommands", () => {
         api: { sendDocument },
       });
       registerTelegramNativeCommands({
-        ...createNativeCommandTestParams({}, { bot: botHarness.bot }),
+        ...createNativeCommandTestParams(
+          {},
+          { bot: botHarness.bot, allowFrom: ["200"], telegramCfg: { allowFrom: ["200"] } },
+        ),
       });
 
       const handler = botHarness.commandHandlers.get("trace");
@@ -442,9 +448,9 @@ describe("registerTelegramNativeCommands", () => {
         name.startsWith("clawmobile-trace-trace-2-"),
       );
       expect(snapshots).toHaveLength(1);
-      await expect(fs.readFile(path.join(traceDir, snapshots[0] ?? ""), "utf-8")).resolves.toContain(
-        '"x":10',
-      );
+      await expect(
+        fs.readFile(path.join(traceDir, snapshots[0] ?? ""), "utf-8"),
+      ).resolves.toContain('"x":10');
     } finally {
       vi.unstubAllEnvs();
       await fs.rm(tempWorkspace, { recursive: true, force: true });
@@ -479,7 +485,10 @@ describe("registerTelegramNativeCommands", () => {
         api: { sendDocument: vi.fn().mockResolvedValue({ message_id: 7 }) },
       });
       registerTelegramNativeCommands({
-        ...createNativeCommandTestParams({}, { bot: botHarness.bot }),
+        ...createNativeCommandTestParams(
+          {},
+          { bot: botHarness.bot, allowFrom: ["200"], telegramCfg: { allowFrom: ["200"] } },
+        ),
       });
 
       const traceListHandler = botHarness.commandHandlers.get("trace_list");
@@ -511,7 +520,10 @@ describe("registerTelegramNativeCommands", () => {
       api: { sendDocument },
     });
     registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { bot: botHarness.bot }),
+      ...createNativeCommandTestParams(
+        {},
+        { bot: botHarness.bot, allowFrom: ["200"], telegramCfg: { allowFrom: ["200"] } },
+      ),
     });
 
     const handler = botHarness.commandHandlers.get("trace");

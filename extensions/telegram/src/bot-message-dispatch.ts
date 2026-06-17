@@ -39,6 +39,8 @@ import {
   logVerbose,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
+import { logTelegramBenchmarkEvent } from "./benchmark-log.js";
+import { announceTelegramTaskCompleted } from "./benchmark-progress.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
@@ -69,8 +71,6 @@ import {
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import { logTelegramBenchmarkEvent } from "./benchmark-log.js";
-import { announceTelegramTaskCompleted } from "./benchmark-progress.js";
 import {
   buildTelegramErrorScopeKey,
   isSilentErrorPolicy,
@@ -1152,19 +1152,16 @@ export const dispatchTelegramMessage = async ({
                       if (reply.hasMedia) {
                         const payloadWithoutSuppressedReasoning =
                           typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-                        clearPendingCompactionReplayBoundaryOnVisibleBoundary(
-                          await sendPayload(payloadWithoutSuppressedReasoning).then((delivered) => {
-                            if (info.kind === "final" && delivered) {
-                              await logReplyDelivered({
-                                deliveryPath: "send_payload",
-                                replyKind: info.kind,
-                                hasMedia: reply.hasMedia,
-                                suppressedReasoningOnly: true,
-                              });
-                            }
-                            return delivered;
-                          }),
-                        );
+                        const delivered = await sendPayload(payloadWithoutSuppressedReasoning);
+                        if (info.kind === "final" && delivered) {
+                          await logReplyDelivered({
+                            deliveryPath: "send_payload",
+                            replyKind: info.kind,
+                            hasMedia: reply.hasMedia,
+                            suppressedReasoningOnly: true,
+                          });
+                        }
+                        clearPendingCompactionReplayBoundaryOnVisibleBoundary(delivered);
                       }
                       if (info.kind === "final") {
                         await flushBufferedFinalAnswer();
@@ -1186,20 +1183,17 @@ export const dispatchTelegramMessage = async ({
                       }
                       return;
                     }
-                    clearPendingCompactionReplayBoundaryOnVisibleBoundary(
-                      await sendPayload(payload).then((delivered) => {
-                        if (info.kind === "final" && delivered) {
-                          await logReplyDelivered({
-                            deliveryPath: "send_payload",
-                            replyKind: info.kind,
-                            hasMedia: reply.hasMedia,
-                            hasText: typeof payload.text === "string" && payload.text.length > 0,
-                            suppressedReasoningOnly: false,
-                          });
-                        }
-                        return delivered;
-                      }),
-                    );
+                    const delivered = await sendPayload(payload);
+                    if (info.kind === "final" && delivered) {
+                      await logReplyDelivered({
+                        deliveryPath: "send_payload",
+                        replyKind: info.kind,
+                        hasMedia: reply.hasMedia,
+                        hasText: typeof payload.text === "string" && payload.text.length > 0,
+                        suppressedReasoningOnly: false,
+                      });
+                    }
+                    clearPendingCompactionReplayBoundaryOnVisibleBoundary(delivered);
                     if (info.kind === "final") {
                       await flushBufferedFinalAnswer();
                       pendingCompactionReplayBoundary = false;

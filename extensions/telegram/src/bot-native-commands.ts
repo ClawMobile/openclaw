@@ -179,10 +179,10 @@ type ClawMobileTraceListEntry = ClawMobileTraceSummary & {
 };
 
 const CLAWMOBILE_LEGACY_TRACE_FILENAME = "clawmobile-trace.jsonl";
-const CLAWMOBILE_TRACE_RUN_FILENAME_RE =
-  /^clawmobile-trace-(.+)-\d+-\1_\d+_\d+\.jsonl$/i;
+const CLAWMOBILE_TRACE_RUN_FILENAME_RE = /^clawmobile-trace-(.+)-\d+-\1_\d+_\d+\.jsonl$/i;
 const CLAWMOBILE_TRACE_ARTIFACT_FILENAME_RE = /^clawmobile-trace.*\.jsonl$/i;
 const CLAWMOBILE_TRACE_LIST_LIMIT = 50;
+const CLAWMOBILE_TRACE_NATIVE_COMMANDS = new Set(["trace", "trace_list", "trace_clear"]);
 
 let telegramNativeCommandDeliveryRuntimePromise:
   | Promise<typeof import("./bot-native-commands.delivery.runtime.js")>
@@ -397,7 +397,7 @@ async function summarizeClawMobileTraceFile(file: string): Promise<ClawMobileTra
     startedAt: first?.timestamp,
     tool: first?.tool,
     backend: first?.backend,
-    firstAction: first?.action ?? (label ?? undefined),
+    firstAction: first?.action ?? label ?? undefined,
     lastAction,
     label: label ?? first?.tool ?? undefined,
   };
@@ -497,7 +497,10 @@ async function clearClawMobileTracesForTelegram() {
       deleted += 1;
       bytes += item.stat.size;
     } catch (error) {
-      errors.push({ path: item.file, error: error instanceof Error ? error.message : String(error) });
+      errors.push({
+        path: item.file,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -1376,65 +1379,70 @@ export const registerTelegramNativeCommands = ({
     });
   };
 
-  bot.command("trace_list", async (ctx: TelegramNativeCommandContext) => {
-    const resolved = await resolveTraceCommandContext(ctx);
-    if (!resolved) {
-      return;
-    }
-    const listed = await listClawMobileTracesForTelegram(CLAWMOBILE_TRACE_LIST_LIMIT);
-    await sendTraceCommandText(resolved.auth, resolved.threadParams, listed.text);
-  });
-
-  bot.command("trace_clear", async (ctx: TelegramNativeCommandContext) => {
-    const resolved = await resolveTraceCommandContext(ctx);
-    if (!resolved) {
-      return;
-    }
-    const cleared = await clearClawMobileTracesForTelegram();
-    await sendTraceCommandText(resolved.auth, resolved.threadParams, cleared.text);
-  });
-
-  bot.command("trace", async (ctx: TelegramNativeCommandContext) => {
-    const rawText = normalizeOptionalString(ctx.match) ?? "";
-    const index = rawText ? Number.parseInt(rawText, 10) : undefined;
-    const hasInvalidArgs = rawText.length > 0 && !/^\d+$/.test(rawText);
-    const resolved = await resolveTraceCommandContext(ctx);
-    if (!resolved) {
-      return;
-    }
-    if (hasInvalidArgs) {
-      await sendTraceCommandText(
-        resolved.auth,
-        resolved.threadParams,
-        "Use /trace or /trace <number>.",
-      );
-      return;
-    }
-
-    const exported = await exportSelectedClawMobileTraceSnapshotForTelegram(
-      index !== undefined ? { index, label: `trace-${index}` } : undefined,
-    );
-    if (!exported.ok) {
-      const text = exported.text ?? `ClawMobile trace file was not found yet: ${exported.path}`;
-      await sendTraceCommandText(resolved.auth, resolved.threadParams, text);
-      return;
-    }
-
-    const file = new InputFile(exported.path, path.basename(exported.path));
-    await withTelegramApiErrorLogging({
-      operation: "sendDocument",
-      runtime,
-      fn: () =>
-        bot.api.sendDocument(resolved.auth.chatId, file, {
-          caption: `ClawMobile trace: ${exported.label}`,
-          ...resolved.threadParams,
-        }),
+  const registerClawMobileTraceCommands = () => {
+    bot.command("trace_list", async (ctx: TelegramNativeCommandContext) => {
+      const resolved = await resolveTraceCommandContext(ctx);
+      if (!resolved) {
+        return;
+      }
+      const listed = await listClawMobileTracesForTelegram(CLAWMOBILE_TRACE_LIST_LIMIT);
+      await sendTraceCommandText(resolved.auth, resolved.threadParams, listed.text);
     });
-  });
+
+    bot.command("trace_clear", async (ctx: TelegramNativeCommandContext) => {
+      const resolved = await resolveTraceCommandContext(ctx);
+      if (!resolved) {
+        return;
+      }
+      const cleared = await clearClawMobileTracesForTelegram();
+      await sendTraceCommandText(resolved.auth, resolved.threadParams, cleared.text);
+    });
+
+    bot.command("trace", async (ctx: TelegramNativeCommandContext) => {
+      const rawText = normalizeOptionalString(ctx.match) ?? "";
+      const index = rawText ? Number.parseInt(rawText, 10) : undefined;
+      const hasInvalidArgs = rawText.length > 0 && !/^\d+$/.test(rawText);
+      const resolved = await resolveTraceCommandContext(ctx);
+      if (!resolved) {
+        return;
+      }
+      if (hasInvalidArgs) {
+        await sendTraceCommandText(
+          resolved.auth,
+          resolved.threadParams,
+          "Use /trace or /trace <number>.",
+        );
+        return;
+      }
+
+      const exported = await exportSelectedClawMobileTraceSnapshotForTelegram(
+        index !== undefined ? { index, label: `trace-${index}` } : undefined,
+      );
+      if (!exported.ok) {
+        const text = exported.text ?? `ClawMobile trace file was not found yet: ${exported.path}`;
+        await sendTraceCommandText(resolved.auth, resolved.threadParams, text);
+        return;
+      }
+
+      const file = new InputFile(exported.path, path.basename(exported.path));
+      await withTelegramApiErrorLogging({
+        operation: "sendDocument",
+        runtime,
+        fn: () =>
+          bot.api.sendDocument(resolved.auth.chatId, file, {
+            caption: `ClawMobile trace: ${exported.label}`,
+            ...resolved.threadParams,
+          }),
+      });
+    });
+  };
 
   if (commandsToRegister.length > 0 || pluginCatalog.commands.length > 0) {
     for (const command of nativeCommands) {
       const normalizedCommandName = normalizeTelegramCommandName(command.name);
+      if (CLAWMOBILE_TRACE_NATIVE_COMMANDS.has(normalizedCommandName)) {
+        continue;
+      }
       bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
         const msg = ctx.message;
         if (!msg) {
@@ -1944,4 +1952,6 @@ export const registerTelegramNativeCommands = ({
       fn: () => bot.api.setMyCommands([], { scope: { type: "all_group_chats" } }),
     }).catch(() => {});
   }
+
+  registerClawMobileTraceCommands();
 };

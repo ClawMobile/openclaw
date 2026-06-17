@@ -40,6 +40,7 @@ export default defineConfig({
           ...sharedUiTestConfig,
           name: "browser",
           include: ["src/**/*.browser.test.ts"],
+          exclude: ["src/ui/chat/chat-responsive.browser.test.ts"],
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
           browser: {
             enabled: true,
@@ -48,6 +49,14 @@ export default defineConfig({
             headless: true,
             ui: false,
           },
+        },
+      }),
+      defineProject({
+        test: {
+          ...sharedUiTestConfig,
+          name: "playwright-node",
+          include: ["src/ui/chat/chat-responsive.browser.test.ts"],
+          environment: "node",
         },
       }),
     ],

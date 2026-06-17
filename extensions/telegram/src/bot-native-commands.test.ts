@@ -324,7 +324,7 @@ describe("registerTelegramNativeCommands", () => {
     );
   });
 
-  it("registers /trace and sends the current trace snapshot as a document", async () => {
+  it("registers /clawmobile_trace and sends the current trace snapshot as a document", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-workspace-"));
     const traceDir = path.join(tempWorkspace, "logs");
     const sendDocument = vi.fn().mockResolvedValue({ message_id: 7 });
@@ -362,7 +362,7 @@ describe("registerTelegramNativeCommands", () => {
         ),
       });
 
-      const handler = botHarness.commandHandlers.get("trace");
+      const handler = botHarness.commandHandlers.get("clawmobile_trace");
       expect(handler).toBeTruthy();
       await handler?.(createPrivateCommandContext());
 
@@ -378,7 +378,7 @@ describe("registerTelegramNativeCommands", () => {
     }
   });
 
-  it("sends an indexed trace snapshot for /trace <number>", async () => {
+  it("sends an indexed trace snapshot for /clawmobile_trace <number>", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-workspace-"));
     const traceDir = path.join(tempWorkspace, "logs");
     const sendDocument = vi.fn().mockResolvedValue({ message_id: 7 });
@@ -436,7 +436,7 @@ describe("registerTelegramNativeCommands", () => {
         ),
       });
 
-      const handler = botHarness.commandHandlers.get("trace");
+      const handler = botHarness.commandHandlers.get("clawmobile_trace");
       expect(handler).toBeTruthy();
       await handler?.(createPrivateCommandContext({ match: "2" }));
 
@@ -457,7 +457,7 @@ describe("registerTelegramNativeCommands", () => {
     }
   });
 
-  it("handles /trace_list and /trace_clear with direct Telegram handlers", async () => {
+  it("handles /clawmobile_trace_list and /clawmobile_trace_clear with direct Telegram handlers", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-workspace-"));
     const traceDir = path.join(tempWorkspace, "logs");
     try {
@@ -491,7 +491,7 @@ describe("registerTelegramNativeCommands", () => {
         ),
       });
 
-      const traceListHandler = botHarness.commandHandlers.get("trace_list");
+      const traceListHandler = botHarness.commandHandlers.get("clawmobile_trace_list");
       expect(traceListHandler).toBeTruthy();
       await traceListHandler?.(createPrivateCommandContext({ chatId: 123 }));
       expect(botHarness.sendMessage).toHaveBeenCalledWith(
@@ -500,7 +500,7 @@ describe("registerTelegramNativeCommands", () => {
         expect.any(Object),
       );
 
-      const traceClearHandler = botHarness.commandHandlers.get("trace_clear");
+      const traceClearHandler = botHarness.commandHandlers.get("clawmobile_trace_clear");
       expect(traceClearHandler).toBeTruthy();
       await traceClearHandler?.(createPrivateCommandContext({ chatId: 123 }));
       expect(botHarness.sendMessage).toHaveBeenLastCalledWith(
@@ -514,7 +514,7 @@ describe("registerTelegramNativeCommands", () => {
     }
   });
 
-  it("rejects /trace when extra arguments are provided", async () => {
+  it("rejects /clawmobile_trace when extra arguments are provided", async () => {
     const sendDocument = vi.fn().mockResolvedValue({ message_id: 7 });
     const botHarness = createCommandBot({
       api: { sendDocument },
@@ -526,7 +526,7 @@ describe("registerTelegramNativeCommands", () => {
       ),
     });
 
-    const handler = botHarness.commandHandlers.get("trace");
+    const handler = botHarness.commandHandlers.get("clawmobile_trace");
     expect(handler).toBeTruthy();
     await handler?.({
       ...createPrivateCommandContext(),
@@ -536,7 +536,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendDocument).not.toHaveBeenCalled();
     expect(botHarness.sendMessage).toHaveBeenCalledWith(
       100,
-      "Use /trace or /trace <number>.",
+      "Use /clawmobile_trace or /clawmobile_trace <number>.",
       expect.any(Object),
     );
   });

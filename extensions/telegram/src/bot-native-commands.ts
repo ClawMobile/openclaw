@@ -182,7 +182,14 @@ const CLAWMOBILE_LEGACY_TRACE_FILENAME = "clawmobile-trace.jsonl";
 const CLAWMOBILE_TRACE_RUN_FILENAME_RE = /^clawmobile-trace-(.+)-\d+-\1_\d+_\d+\.jsonl$/i;
 const CLAWMOBILE_TRACE_ARTIFACT_FILENAME_RE = /^clawmobile-trace.*\.jsonl$/i;
 const CLAWMOBILE_TRACE_LIST_LIMIT = 50;
-const CLAWMOBILE_TRACE_NATIVE_COMMANDS = new Set(["trace", "trace_list", "trace_clear"]);
+const CLAWMOBILE_TRACE_COMMAND = "clawmobile_trace";
+const CLAWMOBILE_TRACE_LIST_COMMAND = "clawmobile_trace_list";
+const CLAWMOBILE_TRACE_CLEAR_COMMAND = "clawmobile_trace_clear";
+const CLAWMOBILE_TRACE_NATIVE_COMMANDS = new Set([
+  CLAWMOBILE_TRACE_COMMAND,
+  CLAWMOBILE_TRACE_LIST_COMMAND,
+  CLAWMOBILE_TRACE_CLEAR_COMMAND,
+]);
 
 let telegramNativeCommandDeliveryRuntimePromise:
   | Promise<typeof import("./bot-native-commands.delivery.runtime.js")>
@@ -1380,7 +1387,7 @@ export const registerTelegramNativeCommands = ({
   };
 
   const registerClawMobileTraceCommands = () => {
-    bot.command("trace_list", async (ctx: TelegramNativeCommandContext) => {
+    bot.command(CLAWMOBILE_TRACE_LIST_COMMAND, async (ctx: TelegramNativeCommandContext) => {
       const resolved = await resolveTraceCommandContext(ctx);
       if (!resolved) {
         return;
@@ -1389,7 +1396,7 @@ export const registerTelegramNativeCommands = ({
       await sendTraceCommandText(resolved.auth, resolved.threadParams, listed.text);
     });
 
-    bot.command("trace_clear", async (ctx: TelegramNativeCommandContext) => {
+    bot.command(CLAWMOBILE_TRACE_CLEAR_COMMAND, async (ctx: TelegramNativeCommandContext) => {
       const resolved = await resolveTraceCommandContext(ctx);
       if (!resolved) {
         return;
@@ -1398,7 +1405,7 @@ export const registerTelegramNativeCommands = ({
       await sendTraceCommandText(resolved.auth, resolved.threadParams, cleared.text);
     });
 
-    bot.command("trace", async (ctx: TelegramNativeCommandContext) => {
+    bot.command(CLAWMOBILE_TRACE_COMMAND, async (ctx: TelegramNativeCommandContext) => {
       const rawText = normalizeOptionalString(ctx.match) ?? "";
       const index = rawText ? Number.parseInt(rawText, 10) : undefined;
       const hasInvalidArgs = rawText.length > 0 && !/^\d+$/.test(rawText);
@@ -1410,7 +1417,7 @@ export const registerTelegramNativeCommands = ({
         await sendTraceCommandText(
           resolved.auth,
           resolved.threadParams,
-          "Use /trace or /trace <number>.",
+          "Use /clawmobile_trace or /clawmobile_trace <number>.",
         );
         return;
       }

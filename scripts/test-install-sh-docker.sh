@@ -59,6 +59,45 @@ console.log(
 ' "$label" "$pack_json_file"
 }
 
+is_version_less() {
+  local left="$1"
+  local right="$2"
+  node - "$left" "$right" <<'NODE'
+const [left, right] = process.argv.slice(2);
+
+function parseVersion(value) {
+  const match = String(value).match(/^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+  if (!match) {
+    return null;
+  }
+  return match.slice(1).map((part) => Number(part));
+}
+
+const parsedLeft = parseVersion(left);
+const parsedRight = parseVersion(right);
+if (!parsedLeft || !parsedRight) {
+  process.exit(1);
+}
+
+for (let index = 0; index < parsedLeft.length; index += 1) {
+  if (parsedLeft[index] < parsedRight[index]) {
+    process.exit(0);
+  }
+  if (parsedLeft[index] > parsedRight[index]) {
+    process.exit(1);
+  }
+}
+process.exit(1);
+NODE
+}
+
+should_skip_update_smoke_for_downgrade() {
+  if [[ -z "$UPDATE_EXPECT_VERSION" || -z "$UPDATE_BASELINE_VERSION" ]]; then
+    return 1
+  fi
+  is_version_less "$UPDATE_EXPECT_VERSION" "$UPDATE_BASELINE_VERSION"
+}
+
 assert_pack_unpacked_size_budget() {
   local label="$1"
   local pack_json_file="$2"
@@ -410,32 +449,16 @@ else
     LATEST_VERSION="$(cat "$LATEST_FILE")"
   fi
 
-  echo "==> Run update smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
-  docker run --rm -t \
-    --platform "$SMOKE_PLATFORM" \
-    ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
-    "${NPM_CACHE_DOCKER_ARGS[@]}" \
-    -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
-    -e OPENCLAW_INSTALL_SMOKE_MODE=update \
-    -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
-    -e OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL="$BASELINE_TAG_URL" \
-    -e OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
-    -e OPENCLAW_INSTALL_UPDATE_TAG_URL="$UPDATE_TAG_URL" \
-    -e OPENCLAW_NO_ONBOARD=1 \
-    -e OPENCLAW_NO_PROMPT=1 \
-    -e DEBIAN_FRONTEND=noninteractive \
-    "$SMOKE_IMAGE"
-
-  if [[ "$SKIP_NPM_GLOBAL" == "1" ]]; then
-    echo "==> Skip direct npm global smoke (OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1)"
+  if should_skip_update_smoke_for_downgrade; then
+    echo "==> Skip update smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION}): target is older than baseline; downgrade is not supported"
   else
-    echo "==> Run direct npm global smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
+    echo "==> Run update smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
     docker run --rm -t \
       --platform "$SMOKE_PLATFORM" \
       ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
       "${NPM_CACHE_DOCKER_ARGS[@]}" \
       -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
-      -e OPENCLAW_INSTALL_SMOKE_MODE=npm-global \
+      -e OPENCLAW_INSTALL_SMOKE_MODE=update \
       -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
       -e OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL="$BASELINE_TAG_URL" \
       -e OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
@@ -444,6 +467,26 @@ else
       -e OPENCLAW_NO_PROMPT=1 \
       -e DEBIAN_FRONTEND=noninteractive \
       "$SMOKE_IMAGE"
+
+    if [[ "$SKIP_NPM_GLOBAL" == "1" ]]; then
+      echo "==> Skip direct npm global smoke (OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1)"
+    else
+      echo "==> Run direct npm global smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
+      docker run --rm -t \
+        --platform "$SMOKE_PLATFORM" \
+        ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
+        "${NPM_CACHE_DOCKER_ARGS[@]}" \
+        -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
+        -e OPENCLAW_INSTALL_SMOKE_MODE=npm-global \
+        -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
+        -e OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL="$BASELINE_TAG_URL" \
+        -e OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
+        -e OPENCLAW_INSTALL_UPDATE_TAG_URL="$UPDATE_TAG_URL" \
+        -e OPENCLAW_NO_ONBOARD=1 \
+        -e OPENCLAW_NO_PROMPT=1 \
+        -e DEBIAN_FRONTEND=noninteractive \
+        "$SMOKE_IMAGE"
+    fi
   fi
 fi
 

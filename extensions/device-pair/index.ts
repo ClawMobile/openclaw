@@ -650,7 +650,7 @@ async function listRecentTraceMatches(limit = 5): Promise<TraceFileMatch[]> {
   const matches: TraceFileMatch[] = [];
 
   for (const rootPath of roots) {
-    let entries: Dirent<string>[];
+    let entries: Dirent[];
     try {
       entries = await readdir(rootPath, { withFileTypes: true, encoding: "utf8" });
     } catch {

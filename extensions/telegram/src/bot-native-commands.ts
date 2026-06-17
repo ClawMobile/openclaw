@@ -244,7 +244,7 @@ function isClawMobileTraceArtifactFilename(name: string): boolean {
 }
 
 function sanitizeTraceLabel(label?: string): string {
-  const trimmed = String(label ?? "")
+  const trimmed = (label ?? "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
@@ -289,7 +289,7 @@ async function collectClawMobileTraceFiles(
       // Ignore files that disappear while listing.
     }
   }
-  return files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  return files.toSorted((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
 }
 
 function summarizeTraceInput(tool?: string, input?: Record<string, unknown>): string | null {
@@ -464,7 +464,7 @@ async function listClawMobileTracesForTelegram(limit = CLAWMOBILE_TRACE_LIST_LIM
 }
 
 async function getClawMobileTraceByIndex(index: number) {
-  const normalized = Math.trunc(Number(index));
+  const normalized = Math.trunc(index);
   const files = await collectClawMobileTraceFiles(isClawMobileTraceRunFilename);
   const preview = await listClawMobileTracesForTelegram(CLAWMOBILE_TRACE_LIST_LIMIT);
 

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Bot } from "grammy";
@@ -77,7 +78,7 @@ function adbCommandArgs(args: string[]): string[] {
 function benchmarkScreenshotPath(): string {
   const dir = resolvePreferredOpenClawTmpDir();
   fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `telegram-benchmark-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`);
+  return path.join(dir, `telegram-benchmark-${Date.now()}-${randomUUID()}.png`);
 }
 
 function normalizePngBuffer(buffer: Buffer): Buffer {

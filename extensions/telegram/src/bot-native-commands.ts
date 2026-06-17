@@ -609,7 +609,7 @@ async function exportSelectedClawMobileTraceSnapshotForTelegram(input?: {
   const label = sanitizeTraceLabel(input?.label ?? selectedTrace?.label ?? fallbackLabel);
   const snapshotPath = path.join(
     path.dirname(source),
-    `clawmobile-trace-${label}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.jsonl`,
+    `clawmobile-trace-${label}-${Date.now()}-${randomUUID()}.jsonl`,
   );
   await fs.copyFile(source, snapshotPath);
   return {

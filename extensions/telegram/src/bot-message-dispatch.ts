@@ -30,7 +30,10 @@ import {
 } from "openclaw/plugin-sdk/outbound-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  copyReplyPayloadMetadata,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -849,7 +852,7 @@ export const dispatchTelegramMessage = async ({
       if (payload.text === text) {
         return payload;
       }
-      return { ...payload, text };
+      return copyReplyPayloadMetadata(payload, { ...payload, text });
     };
     const applyTextToFollowUpPayload = (payload: ReplyPayload, text: string): ReplyPayload => {
       const next = applyTextToPayload(payload, text);

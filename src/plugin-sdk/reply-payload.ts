@@ -4,6 +4,7 @@ import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
 export {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyPayloadMetadata,

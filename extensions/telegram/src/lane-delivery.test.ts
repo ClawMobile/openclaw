@@ -1,3 +1,4 @@
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -175,6 +176,33 @@ describe("createLaneTextDeliverer", () => {
     );
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefixes finalized answer preview edits with elapsed source run time", async () => {
+    const harness = createHarness({ answerMessageId: 999, nowMs: 12_345 });
+    const payload = setReplyPayloadMetadata(
+      { text: HELLO_FINAL },
+      { sourceRunStartedAtMs: 10_000 },
+    );
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: HELLO_FINAL,
+      payload,
+      infoKind: "final",
+    });
+
+    const expectedText = `[Time: 2.35 s]\n\n${HELLO_FINAL}`;
+    expect(expectPreviewFinalized(result)).toEqual({ content: expectedText, messageId: 999 });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneName: "answer",
+        messageId: 999,
+        text: expectedText,
+        context: "final",
+      }),
+    );
+    expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
   it("primes stop-created previews with final text before editing", async () => {

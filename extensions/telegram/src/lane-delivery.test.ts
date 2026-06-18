@@ -25,6 +25,7 @@ function createHarness(params?: {
   answerPreviewVisibleSinceMs?: number;
   splitFinalTextForPreview?: (text: string) => readonly string[];
   nowMs?: number;
+  sourceRunStartedAtMs?: number;
 }) {
   const answer =
     params?.answerStream ??
@@ -81,6 +82,7 @@ function createHarness(params?: {
     log,
     markDelivered,
     now: params?.nowMs != null ? () => params.nowMs! : undefined,
+    sourceRunStartedAtMs: params?.sourceRunStartedAtMs,
   });
 
   return {
@@ -203,6 +205,27 @@ describe("createLaneTextDeliverer", () => {
       }),
     );
     expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
+  it("prefixes finalized answer preview edits from lane timing when payload metadata is absent", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      nowMs: 22_500,
+      sourceRunStartedAtMs: 20_000,
+    });
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    const expectedText = `[Time: 2.50 s]\n\n${HELLO_FINAL}`;
+    expect(expectPreviewFinalized(result)).toEqual({ content: expectedText, messageId: 999 });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneName: "answer",
+        messageId: 999,
+        text: expectedText,
+        context: "final",
+      }),
+    );
   });
 
   it("primes stop-created previews with final text before editing", async () => {

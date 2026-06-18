@@ -112,6 +112,7 @@ type CreateLaneTextDelivererParams = {
   log: (message: string) => void;
   markDelivered: () => void;
   now?: () => number;
+  sourceRunStartedAtMs?: number;
   // Force fresh final when a visible non-preview message has been delivered
   // since the active preview was created, even if the preview is younger
   // than the long-lived threshold (#76529).
@@ -618,7 +619,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       infoKind === "final" && laneName === "answer"
         ? formatElapsedPreviewText(
             text,
-            normalizeTimingStartedAt(getReplyPayloadMetadata(payload)?.sourceRunStartedAtMs),
+            normalizeTimingStartedAt(
+              params.sourceRunStartedAtMs ?? getReplyPayloadMetadata(payload)?.sourceRunStartedAtMs,
+            ),
             readNow(),
           )
         : text;

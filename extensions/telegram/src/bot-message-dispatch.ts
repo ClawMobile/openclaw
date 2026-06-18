@@ -268,6 +268,7 @@ export const dispatchTelegramMessage = async ({
   telegramDeps: injectedTelegramDeps,
   opts,
 }: DispatchTelegramMessageParams) => {
+  const turnStartedAtMs = Date.now();
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const {
@@ -951,6 +952,7 @@ export const dispatchTelegramMessage = async ({
           accountId: route.accountId,
           messageId,
           textLength: text.length,
+          hasTimePrefix: /^\[Time: \d+(?:\.\d+)? s\]/u.test(text.trimStart()),
           hasPreviewButtons: Boolean(previewButtons?.length),
         });
         await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(chatId, messageId, text, {
@@ -971,6 +973,7 @@ export const dispatchTelegramMessage = async ({
       markDelivered: () => {
         deliveryState.markDelivered();
       },
+      sourceRunStartedAtMs: turnStartedAtMs,
       getLastVisibleNonPreviewDeliveryAtMs: () => lastVisibleNonPreviewDeliveryAtMs,
     });
 

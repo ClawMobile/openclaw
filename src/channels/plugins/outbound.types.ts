@@ -35,6 +35,7 @@ export type ChannelOutboundContext = {
   deps?: OutboundSendDeps;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  sourceRunStartedAtMs?: number;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {

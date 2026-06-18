@@ -1,4 +1,8 @@
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type {
@@ -201,6 +205,7 @@ function createPluginHandler(
     replyToIdSource?: "explicit" | "implicit";
     threadId?: string | number | null;
     audioAsVoice?: boolean;
+    sourceRunStartedAtMs?: number;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
@@ -210,6 +215,7 @@ function createPluginHandler(
         : baseCtx.replyToIdSource,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
+    sourceRunStartedAtMs: overrides?.sourceRunStartedAtMs,
   });
   const buildTargetRef = (overrides?: {
     threadId?: string | number | null;
@@ -466,10 +472,10 @@ function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload |
       return null;
     }
     if (text) {
-      return {
+      return copyReplyPayloadMetadata(payload, {
         ...payload,
         text: "",
-      };
+      });
     }
   }
   return payload;
@@ -484,18 +490,21 @@ function normalizePayloadsForChannelDelivery(
     let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(payload);
     if (handler.sanitizeText && sanitizedPayload.text) {
       if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
-        sanitizedPayload = {
+        sanitizedPayload = copyReplyPayloadMetadata(sanitizedPayload, {
           ...sanitizedPayload,
           text: handler.sanitizeText(sanitizedPayload),
-        };
+        });
       }
     }
     const normalizedPayload = handler.normalizePayload
       ? handler.normalizePayload(sanitizedPayload)
       : sanitizedPayload;
-    const normalized = normalizedPayload
+    const normalizedPayloadWithMetadata = normalizedPayload
+      ? copyReplyPayloadMetadata(sanitizedPayload, normalizedPayload)
+      : null;
+    const normalized = normalizedPayloadWithMetadata
       ? normalizeEmptyPayloadForDelivery(
-          stripInternalRuntimeScaffoldingFromPayload(normalizedPayload),
+          stripInternalRuntimeScaffoldingFromPayload(normalizedPayloadWithMetadata),
         )
       : null;
     if (normalized) {
@@ -538,7 +547,7 @@ function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
 function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload): ReplyPayload {
   const stripped = stripInternalRuntimeScaffoldingFromValue(payload);
   return stripped && typeof stripped === "object" && !Array.isArray(stripped)
-    ? (stripped as ReplyPayload)
+    ? copyReplyPayloadMetadata(payload, stripped as ReplyPayload)
     : payload;
 }
 
@@ -663,16 +672,16 @@ async function renderPresentationForDelivery(
   const rendered = handler.renderPresentation ? await handler.renderPresentation(payload) : null;
   if (rendered) {
     const { presentation: _presentation, ...withoutPresentation } = rendered;
-    return withoutPresentation;
+    return copyReplyPayloadMetadata(payload, withoutPresentation);
   }
   const { presentation: _presentation, ...withoutPresentation } = payload;
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...withoutPresentation,
     text: renderMessagePresentationFallbackText({
       text: payload.text,
       presentation,
     }),
-  };
+  });
 }
 
 function createMessageSentEmitter(params: {
@@ -804,10 +813,10 @@ async function applyMessageSendingHook(params: {
         },
       };
     }
-    const payload = {
+    const payload = copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
       text: sendingResult.content,
-    };
+    });
     return {
       cancelled: false,
       payload,
@@ -1092,9 +1101,12 @@ async function deliverOutboundPayloadsCore(
       const normalizedEffectivePayload = handler.normalizePayload
         ? handler.normalizePayload(renderedPayload)
         : renderedPayload;
-      const effectivePayload = normalizedEffectivePayload
+      const normalizedEffectivePayloadWithMetadata = normalizedEffectivePayload
+        ? copyReplyPayloadMetadata(renderedPayload, normalizedEffectivePayload)
+        : null;
+      const effectivePayload = normalizedEffectivePayloadWithMetadata
         ? normalizeEmptyPayloadForDelivery(
-            stripInternalRuntimeScaffoldingFromPayload(normalizedEffectivePayload),
+            stripInternalRuntimeScaffoldingFromPayload(normalizedEffectivePayloadWithMetadata),
           )
         : null;
       if (!effectivePayload) {
@@ -1105,12 +1117,14 @@ async function deliverOutboundPayloadsCore(
 
       params.onPayload?.(payloadSummary);
       const replyToResolution = resolveCurrentReplyTo(effectivePayload);
+      const sourceRunStartedAtMs = getReplyPayloadMetadata(effectivePayload)?.sourceRunStartedAtMs;
       const sendOverrides: OutboundMessageSendOverrides = {
         replyToId: replyToResolution.replyToId,
         replyToIdSource: replyToResolution.source,
         ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
         ...(effectivePayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
+        ...(sourceRunStartedAtMs !== undefined ? { sourceRunStartedAtMs } : {}),
       };
       const applySendReplyToConsumption = <T extends OutboundMessageSendOverrides>(
         overrides: T,

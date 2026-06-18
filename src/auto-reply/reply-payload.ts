@@ -50,6 +50,8 @@ export type ReplyPayload = {
 
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** Epoch ms for the source agent run. Channel adapters can use this for late e2e timing. */
+  sourceRunStartedAtMs?: number;
   /**
    * Internal OpenClaw notices generated after a runtime/provider failure are
    * not assistant source replies. Dispatch may deliver them even when normal

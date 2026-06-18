@@ -1,4 +1,5 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
@@ -153,7 +154,7 @@ function createOutboundPayloadPlanEntry(
   const isSilent = parsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
-  const normalizedPayload: ReplyPayload = {
+  const normalizedPayload: ReplyPayload = copyReplyPayloadMetadata(payload, {
     ...payload,
     text:
       formatBtwTextForExternalDelivery({
@@ -166,7 +167,7 @@ function createOutboundPayloadPlanEntry(
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
-  };
+  });
   if (!isRenderablePayload(normalizedPayload) && !isSilent) {
     return null;
   }
@@ -235,10 +236,10 @@ export function createOutboundPayloadPlan(
       continue;
     }
     if (!resolvedSilentReplySettings.rewrite) {
-      const visibleSilentPayload: ReplyPayload = {
+      const visibleSilentPayload: ReplyPayload = copyReplyPayloadMetadata(entry.payload, {
         ...entry.payload,
         text: entry.payload.text?.trim() || "NO_REPLY",
-      };
+      });
       if (!isRenderablePayload(visibleSilentPayload)) {
         continue;
       }
@@ -251,12 +252,12 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    const visibleSilentPayload: ReplyPayload = {
+    const visibleSilentPayload: ReplyPayload = copyReplyPayloadMetadata(entry.payload, {
       ...entry.payload,
       text: resolveSilentReplyRewriteText({
         seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${entry.payload.text ?? ""}`,
       }),
-    };
+    });
     if (!isRenderablePayload(visibleSilentPayload)) {
       continue;
     }

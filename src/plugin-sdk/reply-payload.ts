@@ -3,6 +3,11 @@ import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
+export {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayloadMetadata,
+} from "../auto-reply/reply-payload.js";
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;

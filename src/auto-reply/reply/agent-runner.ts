@@ -38,7 +38,10 @@ import {
   buildFallbackNotice,
   resolveFallbackTransition,
 } from "../fallback-state.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -92,6 +95,20 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function markSourceReplyTimingPayloads(
+  payloads: ReplyPayload[],
+  startedAtMs: number,
+): ReplyPayload[] {
+  return payloads.map((payload) => {
+    if (payload.isError === true || payload.isReasoning === true || !payload.text?.trim()) {
+      return payload;
+    }
+    return setReplyPayloadMetadata(payload, {
+      sourceRunStartedAtMs: startedAtMs,
+    });
+  });
+}
 
 function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
@@ -1588,7 +1605,7 @@ export async function runReplyAgent(params: {
     }
 
     // If verbose is enabled, prepend operational run notices.
-    let finalPayloads = guardedReplyPayloads;
+    let finalPayloads = markSourceReplyTimingPayloads(guardedReplyPayloads, runStartedAt);
     const verboseNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {

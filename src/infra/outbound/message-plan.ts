@@ -10,6 +10,7 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
   threadId?: string | number | null;
   audioAsVoice?: boolean;
   forceDocument?: boolean;
+  sourceRunStartedAtMs?: number;
 };
 
 export type OutboundMessageUnit =

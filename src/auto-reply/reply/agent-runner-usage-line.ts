@@ -4,6 +4,7 @@ import {
   formatUsd,
   type ModelCostConfig,
 } from "../../utils/usage-format.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 export const formatResponseUsageLine = (params: {
@@ -65,10 +66,10 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
   const existing = payloads[index];
   const existingText = existing.text ?? "";
   const separator = existingText.endsWith("\n") ? "" : "\n";
-  const next = {
+  const next = copyReplyPayloadMetadata(existing, {
     ...existing,
     text: `${existingText}${separator}${line}`,
-  };
+  });
   const updated = payloads.slice();
   updated[index] = next;
   return updated;

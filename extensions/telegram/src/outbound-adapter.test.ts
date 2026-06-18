@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
 const pinMessageTelegramMock = vi.fn();
@@ -14,6 +15,58 @@ describe("telegramOutbound", () => {
   beforeEach(() => {
     pinMessageTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("prefixes elapsed time at the final text send boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2230);
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-time" });
+
+    const result = await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "12345",
+      text: "done",
+      deps: { sendTelegram: sendMessageTelegramMock },
+      sourceRunStartedAtMs: 1000,
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "[Time: 1.23 s]\n\ndone",
+      expect.any(Object),
+    );
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-time" });
+  });
+
+  it("prefixes elapsed time for payload sends from reply metadata", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2230);
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-payload", chatId: "12345" });
+
+    const payload = setReplyPayloadMetadata(
+      {
+        text: "payload reply",
+      },
+      { sourceRunStartedAtMs: 1000 },
+    );
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "[Time: 1.23 s]\n\npayload reply",
+      expect.any(Object),
+    );
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-payload", chatId: "12345" });
   });
 
   it("forwards mediaLocalRoots in direct media sends", async () => {

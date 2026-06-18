@@ -100,6 +100,7 @@ export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
+const replyRouteLogger = createSubsystemLogger("telegram/reply-route");
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -888,6 +889,14 @@ export const dispatchTelegramMessage = async ({
       if (isDispatchSuperseded()) {
         return false;
       }
+      replyRouteLogger.info("bot-message-dispatch.sendPayload.deliverReplies", {
+        chatId,
+        accountId: route.accountId,
+        textLength: payload.text?.length ?? 0,
+        hasMedia: Boolean(payload.mediaUrl ?? payload.mediaUrls?.length),
+        payloadIsError: payload.isError === true,
+        payloadIsReasoning: payload.isReasoning === true,
+      });
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
         replies: [applyQuoteReplyTarget(payload)],
@@ -934,6 +943,13 @@ export const dispatchTelegramMessage = async ({
         if (isDispatchSuperseded()) {
           return;
         }
+        replyRouteLogger.info("bot-message-dispatch.editPreview.editMessageTelegram", {
+          chatId,
+          accountId: route.accountId,
+          messageId,
+          textLength: text.length,
+          hasPreviewButtons: Boolean(previewButtons?.length),
+        });
         await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(chatId, messageId, text, {
           api: bot.api,
           cfg,

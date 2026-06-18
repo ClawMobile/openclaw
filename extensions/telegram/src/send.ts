@@ -186,6 +186,10 @@ const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
 const MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE = 64;
 
+function hasElapsedTimePrefix(text: string): boolean {
+  return /^\[Time: \d+(?:\.\d+)? s\]/u.test(text.trimStart());
+}
+
 function asTelegramClientFetch(
   fetchImpl: typeof globalThis.fetch,
 ): NonNullable<ApiClientOptions["fetch"]> {
@@ -602,6 +606,17 @@ export async function sendMessageTelegram(
     opts.maxBytes ??
     (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;
   const replyMarkup = buildInlineKeyboard(opts.buttons);
+  sendLogger.info("reply-route.sendMessageTelegram", {
+    to,
+    chatId,
+    accountId: account.accountId,
+    textLength: text.length,
+    hasTimePrefix: hasElapsedTimePrefix(text),
+    mediaUrl: Boolean(opts.mediaUrl?.trim()),
+    replyToMessageId: opts.replyToMessageId,
+    messageThreadId: opts.messageThreadId ?? target.messageThreadId,
+    textMode: opts.textMode ?? "markdown",
+  });
 
   const threadParams = buildTelegramThreadReplyParams({
     thread: resolveTelegramSendThreadSpec({
@@ -1340,6 +1355,14 @@ export async function editMessageTelegram(
     verbose: opts.verbose,
   });
   const messageId = normalizeMessageId(messageIdInput);
+  sendLogger.info("reply-route.editMessageTelegram", {
+    chatId,
+    accountId: account.accountId,
+    messageId,
+    textLength: text.length,
+    hasTimePrefix: hasElapsedTimePrefix(text),
+    textMode: opts.textMode ?? "markdown",
+  });
   const requestWithDiag = createTelegramRequestWithDiag({
     cfg,
     account,

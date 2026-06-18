@@ -27,6 +27,7 @@ import {
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-send-deps";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -56,7 +57,7 @@ import {
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import * as monitorModule from "./monitor.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
-import { sendTelegramPayloadMessages } from "./outbound-adapter.js";
+import { formatElapsedTelegramText, sendTelegramPayloadMessages } from "./outbound-adapter.js";
 import { telegramOutboundBaseAdapter } from "./outbound-base.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import type { TelegramProbe } from "./probe.js";
@@ -88,6 +89,7 @@ import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramUpdateOffsetRuntime = typeof import("../update-offset-runtime-api.js");
+const replyRouteLogger = createSubsystemLogger("telegram/reply-route");
 
 let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
 let telegramUpdateOffsetRuntimePromise: Promise<TelegramUpdateOffsetRuntime> | undefined;
@@ -202,11 +204,23 @@ async function sendTelegramOutbound(params: {
   threadId?: string | number | null;
   silent?: boolean | null;
   gatewayClientScopes?: readonly string[] | null;
+  sourceRunStartedAtMs?: number;
+  routeLabel: string;
 }) {
   const send = await resolveTelegramSend(params.deps);
+  const text = formatElapsedTelegramText(params.text, params.sourceRunStartedAtMs);
+  replyRouteLogger.info(params.routeLabel, {
+    to: params.to,
+    accountId: params.accountId,
+    threadId: params.threadId,
+    textLength: params.text.length,
+    mediaUrl: Boolean(params.mediaUrl),
+    hasSourceTiming: params.sourceRunStartedAtMs !== undefined,
+    addsTimePrefix: text !== params.text,
+  });
   return await send(
     params.to,
-    params.text,
+    text,
     buildTelegramSendOptions({
       cfg: params.cfg,
       mediaUrl: params.mediaUrl,
@@ -1081,12 +1095,23 @@ export const telegramPlugin = createChatChannelPlugin({
         silent,
         forceDocument,
         gatewayClientScopes,
+        sourceRunStartedAtMs,
       }) => {
         const send = await resolveTelegramSend(deps);
+        replyRouteLogger.info("channel.outbound.base.sendPayload", {
+          to,
+          accountId,
+          threadId,
+          textLength: payload.text?.length ?? 0,
+          hasSourceTiming: sourceRunStartedAtMs !== undefined,
+          payloadIsError: payload.isError === true,
+          payloadIsReasoning: payload.isReasoning === true,
+        });
         const result = await sendTelegramPayloadMessages({
           send,
           to,
           payload,
+          sourceRunStartedAtMs,
           baseOpts: buildTelegramSendOptions({
             cfg,
             mediaLocalRoots,
@@ -1113,6 +1138,7 @@ export const telegramPlugin = createChatChannelPlugin({
         threadId,
         silent,
         gatewayClientScopes,
+        sourceRunStartedAtMs,
       }) =>
         await sendTelegramOutbound({
           cfg,
@@ -1124,6 +1150,8 @@ export const telegramPlugin = createChatChannelPlugin({
           threadId,
           silent,
           gatewayClientScopes,
+          sourceRunStartedAtMs,
+          routeLabel: "channel.outbound.attachedResults.sendText",
         }),
       sendMedia: async ({
         cfg,
@@ -1137,6 +1165,7 @@ export const telegramPlugin = createChatChannelPlugin({
         threadId,
         silent,
         gatewayClientScopes,
+        sourceRunStartedAtMs,
       }) =>
         await sendTelegramOutbound({
           cfg,
@@ -1150,6 +1179,8 @@ export const telegramPlugin = createChatChannelPlugin({
           threadId,
           silent,
           gatewayClientScopes,
+          sourceRunStartedAtMs,
+          routeLabel: "channel.outbound.attachedResults.sendMedia",
         }),
       sendPoll: async ({
         cfg,

@@ -17,6 +17,7 @@ import {
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { notifyTelegramInboundTurnOutboundSuccess } from "./inbound-turn-delivery.js";
@@ -54,6 +55,7 @@ export const telegramActionRuntime = {
   sendPollTelegram,
   sendStickerTelegram,
 };
+const replyRouteLogger = createSubsystemLogger("telegram/reply-route");
 
 const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
   0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f,
@@ -378,6 +380,15 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
+    replyRouteLogger.info("action-runtime.sendMessageTelegram", {
+      to,
+      accountId,
+      textLength: content.length,
+      hasMedia: Boolean(mediaUrl),
+      hasButtons: Boolean(buttons?.length),
+      replyToMessageId,
+      messageThreadId,
+    });
     const result = await telegramActionRuntime.sendMessageTelegram(to, content, {
       cfg,
       token,
@@ -542,6 +553,13 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
+    replyRouteLogger.info("action-runtime.editMessageTelegram", {
+      chatId,
+      accountId,
+      messageId,
+      textLength: content.length,
+      hasButtons: Boolean(buttons?.length),
+    });
     const result = await telegramActionRuntime.editMessageTelegram(
       chatId ?? "",
       messageId ?? 0,

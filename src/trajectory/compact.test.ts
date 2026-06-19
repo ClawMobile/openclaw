@@ -3,12 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import AjvPkg from "ajv";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  clearPendingTrajectoryDeliveriesForTesting,
-  createCompactTrajectoryRecorder,
-  flushPendingTrajectoryForRunId,
-  resolveCompactTrajectoryWriteFlags,
-} from "./compact.js";
+import { createCompactTrajectoryRecorder, resolveCompactTrajectoryWriteFlags } from "./compact.js";
 
 const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
 const tempDirs: string[] = [];
@@ -45,7 +40,6 @@ function expectSchemaValid(document: unknown): void {
 }
 
 afterEach(() => {
-  clearPendingTrajectoryDeliveriesForTesting();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -84,7 +78,7 @@ describe("PI benchmark trajectory collector", () => {
     expect(recorder).toBeNull();
   });
 
-  it("writes a schema-valid v1 trajectory with turn rollups", async () => {
+  it("writes a schema-valid v2.1 trajectory directly during final flush", async () => {
     const tmpDir = makeTempDir();
     const recorder = createCompactTrajectoryRecorder({
       cwd: tmpDir,
@@ -95,6 +89,10 @@ describe("PI benchmark trajectory collector", () => {
         CLAWMOBILE_TRAJECTORY_ID: "traj_test_run",
         CLAWMOBILE_TRAJECTORY_TASK_ID: "keep_create_note_titled",
         CLAWMOBILE_TRAJECTORY_INSTRUCTION: "benchmark instruction",
+        CLAWMOBILE_TRAJECTORY_USER_ID: "user-a",
+        CLAWMOBILE_TRAJECTORY_PARSED_PARAMS: JSON.stringify([
+          { name: "note_title", value: "Buy milk", type: "text" },
+        ]),
         CLAWMOBILE_TRAJECTORY_SUCCESS: "true",
         CLAWMOBILE_TRAJECTORY_CHECKER_OUTPUT: JSON.stringify({
           passed_subconditions: ["note exists"],
@@ -109,44 +107,45 @@ describe("PI benchmark trajectory collector", () => {
     recorder?.recordEvent("tool.call", {
       toolCallId: "call-1",
       name: "tap",
-      arguments: { text: "must not be written" },
-    });
-    recorder?.recordEvent("tool.timeout", {
-      toolCallId: "call-1",
-      name: "tap",
+      arguments: { resource_id: "button-id" },
     });
     recorder?.recordEvent("tool.result", {
       toolCallId: "call-1",
-      success: false,
-      contentPreview: "must not be written",
+      success: true,
+      contentPreview: "button tapped",
     });
     recorder?.recordModelResponse({
       durationMs: 25,
       usage: { input: 10, output: 5, cacheRead: 3 },
+      assistantTexts: ["I will tap the button."],
+      finalPromptText: "Create a note",
+      systemPrompt: "System prompt",
     });
-    recorder?.recordEvent("session.ended", {
-      status: "success",
-      finalAssistantText: "must not be written",
-    });
+    recorder?.recordEvent("session.ended", { status: "success" });
     await recorder?.flush();
 
     const filePath = path.join(tmpDir, "traj_test_run.json");
-    expect(fs.existsSync(filePath)).toBe(false);
-    await expect(flushPendingTrajectoryForRunId("run-1")).resolves.toMatchObject({
-      flushed: true,
-      filePath,
-    });
-    const content = fs.readFileSync(filePath, "utf8");
-    const trajectory = JSON.parse(content) as {
+    expect(fs.existsSync(filePath)).toBe(true);
+    const trajectory = readTrajectory(filePath) as {
       schema_version: string;
       trajectory_id: string;
+      user_id: string;
       task_id: string;
       instruction: string;
+      parsed_params: Array<{ name: string; value: string; type: string }>;
       agent: { framework: string; model: string };
+      messages: Record<string, unknown>;
+      observations: Record<string, unknown>;
       turns: Array<{
         turn_index: number;
-        actions: string[];
-        error_count: number;
+        input: { context: string[] };
+        output_ref: string;
+        execution?: Array<{
+          tool_call_id: string;
+          status: string;
+          result_ref?: string;
+          action?: { type: string; target?: { resource_id?: string } };
+        }>;
         token_usage: { input: number; output: number; cached?: number };
         duration_ms?: number;
       }>;
@@ -161,16 +160,43 @@ describe("PI benchmark trajectory collector", () => {
     };
     expectSchemaValid(trajectory);
     expect(trajectory).toMatchObject({
-      schema_version: "1.0.0-v1",
+      schema_version: "2.1.0",
       trajectory_id: "traj_test_run",
+      user_id: "user-a",
       task_id: "keep_create_note_titled",
       instruction: "benchmark instruction",
+      parsed_params: [{ name: "note_title", value: "Buy milk", type: "text" }],
       agent: { framework: "openclaw", model: "gpt-5.5" },
+      messages: {
+        m_sys: { role: "system", text: "System prompt" },
+        m_task: { role: "user", text: "Create a note" },
+        m_t0_out: {
+          role: "assistant",
+          assistant_text: "I will tap the button.",
+          tool_calls: [
+            { tool_call_id: "call-1", name: "tap", arguments: { resource_id: "button-id" } },
+          ],
+        },
+        m_t0_res: {
+          role: "tool",
+          tool_call_id: "call-1",
+          text: "button tapped",
+        },
+      },
+      observations: {},
       turns: [
         {
           turn_index: 0,
-          actions: ["tap"],
-          error_count: 1,
+          input: { context: ["m_sys", "m_task"] },
+          output_ref: "m_t0_out",
+          execution: [
+            {
+              tool_call_id: "call-1",
+              status: "ok",
+              result_ref: "m_t0_res",
+              action: { type: "tap", target: { resource_id: "button-id" } },
+            },
+          ],
           token_usage: { input: 10, output: 5, cached: 3 },
           duration_ms: 25,
         },
@@ -182,15 +208,14 @@ describe("PI benchmark trajectory collector", () => {
       rollups: {
         total_turns: 1,
         total_actions: 1,
-        total_errors: 1,
+        total_errors: 0,
         total_tokens: { input: 10, output: 5 },
         total_duration_ms: 25,
       },
     });
-    expect(content).not.toContain("must not be written");
   });
 
-  it("records thinking-only turns with an empty action list", async () => {
+  it("records thinking-only turns with an empty execution list", async () => {
     const tmpDir = makeTempDir();
     const recorder = createCompactTrajectoryRecorder({
       cwd: tmpDir,
@@ -206,19 +231,18 @@ describe("PI benchmark trajectory collector", () => {
     recorder?.recordModelResponse({
       durationMs: 50,
       usage: { input: 7, output: 2 },
+      assistantTexts: ["Done."],
+      finalPromptText: "Think only",
     });
     recorder?.recordEvent("session.ended", { status: "success" });
     await recorder?.flush();
-    await expect(flushPendingTrajectoryForRunId("run-1")).resolves.toMatchObject({
-      flushed: true,
-    });
 
     const trajectory = readTrajectory(path.join(tmpDir, "traj_no_action.json")) as {
-      turns: Array<{ actions: string[] }>;
+      turns: Array<{ execution?: unknown[] }>;
       rollups: { total_actions: number };
     };
     expectSchemaValid(trajectory);
-    expect(trajectory.turns[0]?.actions).toEqual([]);
+    expect(trajectory.turns[0]?.execution).toBeUndefined();
     expect(trajectory.rollups.total_actions).toBe(0);
   });
 
@@ -237,9 +261,6 @@ describe("PI benchmark trajectory collector", () => {
 
     recorder?.recordEvent("session.ended", { aborted: true });
     await recorder?.flush();
-    await expect(flushPendingTrajectoryForRunId("run-1")).resolves.toMatchObject({
-      flushed: true,
-    });
 
     const trajectory = readTrajectory(path.join(tmpDir, "traj_abort.json")) as {
       outcome: { success: boolean; termination_reason: string };
@@ -265,7 +286,7 @@ describe("PI benchmark trajectory collector", () => {
     });
 
     recorder?.recordEvent("session.ended", { status: "success" });
-    await recorder?.flush();
+    await expect(recorder?.flush()).rejects.toThrow(/symlinked directory/u);
 
     expect(fs.existsSync(path.join(targetDir, "traj_symlink.json"))).toBe(false);
   });

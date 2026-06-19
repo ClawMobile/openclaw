@@ -32,7 +32,6 @@ import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import {
   copyReplyPayloadMetadata,
-  getReplyPayloadMetadata,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -99,7 +98,6 @@ import {
 } from "./reasoning-lane-coordinator.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
-import { flushPendingTrajectoryDeliveryForRun } from "./trajectory-delivery.js";
 
 export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 
@@ -977,27 +975,6 @@ export const dispatchTelegramMessage = async ({
       },
       sourceRunStartedAtMs: turnStartedAtMs,
       getLastVisibleNonPreviewDeliveryAtMs: () => lastVisibleNonPreviewDeliveryAtMs,
-      onFinalAnswerDelivered: async ({ payload }) => {
-        const sourceRunId = getReplyPayloadMetadata(payload)?.sourceRunId;
-        if (!sourceRunId) {
-          return;
-        }
-        const flushResult = await flushPendingTrajectoryDeliveryForRun(sourceRunId);
-        if (flushResult.error) {
-          logVerbose(
-            `telegram: trajectory save failed for run ${sourceRunId}: ${formatErrorMessage(
-              flushResult.error,
-            )}`,
-          );
-          return;
-        }
-        if (flushResult.flushed) {
-          replyRouteLogger.info("bot-message-dispatch.trajectory.flushed", {
-            sourceRunId,
-            filePath: flushResult.filePath,
-          });
-        }
-      },
     });
 
     if (isDmTopic) {

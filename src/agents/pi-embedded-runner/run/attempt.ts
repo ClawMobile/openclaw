@@ -3492,6 +3492,26 @@ export async function runEmbeddedAttempt(
         ...toolMetasNormalized.map((entry) => entry.toolName),
         ...clientToolCallSlots.flatMap((slot) => (slot.completed ? [slot.name] : [])),
       ].filter((name): name is string => typeof name === "string" && name.trim().length > 0);
+      const compactTrajectoryToolCalls = [
+        ...toolMetasNormalized.map((entry, index) => ({
+          toolCallId: `meta-${index}`,
+          name: entry.toolName,
+          arguments: entry.meta ? { meta: entry.meta } : {},
+        })),
+        ...clientToolCallSlots.flatMap((slot) =>
+          slot.completed
+            ? [
+                {
+                  toolCallId: slot.toolCallId,
+                  name: slot.name,
+                  arguments: slot.params ?? {},
+                  success: true,
+                  resultText: "Tool execution delegated to client",
+                },
+              ]
+            : [],
+        ),
+      ].filter((call) => call.name.trim().length > 0);
       compactTrajectoryRecorder?.recordModelResponse({
         usage: attemptUsage,
         durationMs:
@@ -3499,7 +3519,11 @@ export async function runEmbeddedAttempt(
             ? Math.max(0, Date.now() - compactTrajectoryPromptStartedAtMs)
             : undefined,
         actionNames: compactTrajectoryActionNames,
+        toolCalls: compactTrajectoryToolCalls,
         errorCount: promptError || getLastToolError?.() ? 1 : 0,
+        assistantTexts,
+        finalPromptText,
+        systemPrompt: systemPromptText,
       });
       trajectoryRecorder?.recordEvent("model.completed", {
         aborted,

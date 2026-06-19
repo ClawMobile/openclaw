@@ -20,6 +20,16 @@ type CompactTrajectoryUsage = {
   cacheRead?: number;
 };
 
+type CompactTrajectoryToolCallInput = {
+  toolCallId?: string;
+  name: string;
+  arguments?: unknown;
+  success?: boolean;
+  error?: string;
+  latencyMs?: number;
+  resultText?: string;
+};
+
 type CompactTrajectoryRecorder = {
   filePath: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
@@ -28,7 +38,11 @@ type CompactTrajectoryRecorder = {
     usage?: CompactTrajectoryUsage;
     durationMs?: number;
     actionNames?: string[];
+    toolCalls?: CompactTrajectoryToolCallInput[];
     errorCount?: number;
+    assistantTexts?: string[];
+    finalPromptText?: string;
+    systemPrompt?: string;
   }) => void;
   flush: () => Promise<void>;
 };
@@ -53,12 +67,74 @@ type TrajectoryTokenUsage = {
   cached?: number;
 };
 
+type TrajectoryMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  text?: string;
+  obs_ref?: string;
+  tool_call_id?: string;
+  thought?: string;
+  tool_calls?: TrajectoryToolCall[];
+  assistant_text?: string;
+};
+
+type TrajectoryToolCall = {
+  tool_call_id: string;
+  name: string;
+  arguments: unknown;
+};
+
+type TrajectoryExecution = {
+  tool_call_id: string;
+  status: "ok" | "error";
+  error?: string;
+  latency_ms?: number;
+  result_ref?: string;
+  action?: {
+    type:
+      | "tap"
+      | "long_press"
+      | "swipe"
+      | "type"
+      | "key"
+      | "scroll"
+      | "open_app"
+      | "back"
+      | "home"
+      | "wait"
+      | "shell";
+    target?: {
+      resource_id?: string;
+      bounds?: string;
+      text?: string;
+      class?: string;
+    };
+    coord?: {
+      px?: {
+        x?: number;
+        y?: number;
+      };
+      normalized?: {
+        x?: number;
+        y?: number;
+      };
+    };
+    input_value?: string;
+    input_source_param?: string;
+    raw_command?: string;
+  };
+};
+
 type TrajectoryTurn = {
   turn_index: number;
-  actions: string[];
-  error_count: number;
-  token_usage: TrajectoryTokenUsage;
   duration_ms?: number;
+  input: {
+    context: string[];
+  };
+  output_ref: string;
+  execution?: TrajectoryExecution[];
+  env_events?: unknown[];
+  token_usage: TrajectoryTokenUsage;
+  annotations?: Record<string, unknown>;
 };
 
 type TrajectoryOutcome = {
@@ -68,16 +144,22 @@ type TrajectoryOutcome = {
 };
 
 type TrajectoryDocument = {
-  schema_version: "1.0.0-v1";
+  schema_version: "2.1.0";
   trajectory_id: string;
   started_at?: string;
+  user_id?: string;
   task_id: string;
   instruction?: string;
+  parsed_params?: Array<Record<string, unknown>>;
   agent: {
     framework?: string;
+    framework_version?: string;
     model: string;
     model_version?: string;
+    config?: Record<string, unknown>;
   };
+  messages: Record<string, TrajectoryMessage>;
+  observations: Record<string, Record<string, unknown>>;
   turns: TrajectoryTurn[];
   outcome: TrajectoryOutcome;
   rollups: {
@@ -90,27 +172,25 @@ type TrajectoryDocument = {
     };
     total_duration_ms?: number;
   };
+  annotations?: Record<string, unknown>;
 };
 
 type ActiveTurn = {
   turnIndex: number;
   startedAtMs?: number;
-  actions: string[];
+  toolCalls: ActiveToolCall[];
   failedToolCallIds: Set<string>;
   anonymousErrorCount: number;
 };
 
-type PendingTrajectoryDelivery = {
-  filePath: string;
-  registeredAtMs: number;
-  commit: () => Promise<void>;
+type ActiveToolCall = TrajectoryToolCall & {
+  success?: boolean;
+  error?: string;
+  latencyMs?: number;
+  resultText?: string;
 };
 
-type TrajectoryDeliveryRegistry = {
-  pendingByRunId: Map<string, PendingTrajectoryDelivery>;
-};
-
-const TRAJECTORY_SCHEMA_VERSION = "1.0.0-v1";
+const TRAJECTORY_SCHEMA_VERSION = "2.1.0";
 const TRAJECTORY_FILE_MAX_BYTES = 5 * 1024 * 1024;
 const VALID_TERMINATION_REASONS = new Set<TrajectoryTerminationReason>([
   "success",
@@ -120,9 +200,19 @@ const VALID_TERMINATION_REASONS = new Set<TrajectoryTerminationReason>([
   "error",
   "user_abort",
 ]);
-const TRAJECTORY_DELIVERY_REGISTRY_KEY = Symbol.for("openclaw.trajectoryDeliveryRegistry.v1");
-const MAX_PENDING_TRAJECTORY_DELIVERIES = 128;
-const PENDING_TRAJECTORY_DELIVERY_MAX_AGE_MS = 60 * 60 * 1000;
+const ACTION_TYPES = new Set([
+  "tap",
+  "long_press",
+  "swipe",
+  "type",
+  "key",
+  "scroll",
+  "open_app",
+  "back",
+  "home",
+  "wait",
+  "shell",
+]);
 
 type CompactTrajectoryOpenFlagConstants = Pick<
   typeof nodeFs.constants,
@@ -140,77 +230,6 @@ export function resolveCompactTrajectoryWriteFlags(
     constants.O_WRONLY |
     (typeof noFollow === "number" ? noFollow : 0)
   );
-}
-
-function resolveTrajectoryDeliveryRegistry(): TrajectoryDeliveryRegistry {
-  const globalRecord = globalThis as typeof globalThis &
-    Record<symbol, TrajectoryDeliveryRegistry | undefined>;
-  globalRecord[TRAJECTORY_DELIVERY_REGISTRY_KEY] ??= {
-    pendingByRunId: new Map(),
-  };
-  return globalRecord[TRAJECTORY_DELIVERY_REGISTRY_KEY];
-}
-
-function prunePendingTrajectoryDeliveries(
-  registry: TrajectoryDeliveryRegistry,
-  nowMs = Date.now(),
-): void {
-  for (const [runId, pending] of registry.pendingByRunId) {
-    if (nowMs - pending.registeredAtMs > PENDING_TRAJECTORY_DELIVERY_MAX_AGE_MS) {
-      registry.pendingByRunId.delete(runId);
-    }
-  }
-  while (registry.pendingByRunId.size > MAX_PENDING_TRAJECTORY_DELIVERIES) {
-    const oldest = registry.pendingByRunId.keys().next().value;
-    if (!oldest) {
-      return;
-    }
-    registry.pendingByRunId.delete(oldest);
-  }
-}
-
-function registerPendingTrajectoryDelivery(params: {
-  runId: string;
-  filePath: string;
-  commit: () => Promise<void>;
-}): void {
-  const runId = params.runId.trim();
-  if (!runId) {
-    return;
-  }
-  const registry = resolveTrajectoryDeliveryRegistry();
-  prunePendingTrajectoryDeliveries(registry);
-  registry.pendingByRunId.set(runId, {
-    filePath: params.filePath,
-    registeredAtMs: Date.now(),
-    commit: params.commit,
-  });
-}
-
-export async function flushPendingTrajectoryForRunId(
-  runId: string | undefined,
-): Promise<{ flushed: boolean; filePath?: string; error?: unknown }> {
-  const normalizedRunId = runId?.trim();
-  if (!normalizedRunId) {
-    return { flushed: false };
-  }
-  const registry = resolveTrajectoryDeliveryRegistry();
-  const pending = registry.pendingByRunId.get(normalizedRunId);
-  if (!pending) {
-    return { flushed: false };
-  }
-  registry.pendingByRunId.delete(normalizedRunId);
-  try {
-    await pending.commit();
-    return { flushed: true, filePath: pending.filePath };
-  } catch (error) {
-    registry.pendingByRunId.set(normalizedRunId, pending);
-    return { flushed: false, filePath: pending.filePath, error };
-  }
-}
-
-export function clearPendingTrajectoryDeliveriesForTesting(): void {
-  resolveTrajectoryDeliveryRegistry().pendingByRunId.clear();
 }
 
 async function assertNoSymlinkParents(filePath: string): Promise<void> {
@@ -253,7 +272,7 @@ function verifyStableOpenedTrajectoryFile(params: {
 async function safeWriteTrajectoryFile(filePath: string, content: string): Promise<void> {
   const bytes = Buffer.byteLength(content, "utf8");
   if (bytes > TRAJECTORY_FILE_MAX_BYTES) {
-    return;
+    throw new Error(`Refusing to write oversized trajectory: ${bytes} bytes`);
   }
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   await assertNoSymlinkParents(filePath);
@@ -309,6 +328,8 @@ export function createCompactTrajectoryRecorder(
   });
   const instruction = resolveInstruction(params.attempt, env);
   const turns: TrajectoryTurn[] = [];
+  const messages: Record<string, TrajectoryMessage> = {};
+  const contextRefs: string[] = [];
   let activeTurn: ActiveTurn | undefined;
   let finished = false;
   let queue = Promise.resolve();
@@ -319,36 +340,35 @@ export function createCompactTrajectoryRecorder(
     }
     finished = true;
     if (activeTurn) {
-      turns.push(buildTurnRecord(activeTurn, undefined, undefined));
+      turns.push(buildTurnRecord(activeTurn, { messages, contextRefs, instruction }));
       activeTurn = undefined;
     }
     const document: TrajectoryDocument = {
       schema_version: TRAJECTORY_SCHEMA_VERSION,
       trajectory_id: trajectoryId,
       started_at: startedAt.toISOString(),
+      ...(readEnvString(env, "CLAWMOBILE_TRAJECTORY_USER_ID")
+        ? { user_id: readEnvString(env, "CLAWMOBILE_TRAJECTORY_USER_ID") }
+        : {}),
       task_id: taskId,
       ...(instruction ? { instruction } : {}),
+      ...(resolveParsedParams(env) ? { parsed_params: resolveParsedParams(env) } : {}),
       agent: resolveAgent(params.attempt, env),
+      messages,
+      observations: {},
       turns,
       outcome,
       rollups: buildRollups(turns),
+      annotations: {},
     };
     const content = `${JSON.stringify(document, null, 2)}\n`;
-    queue = queue
-      .then(() => {
-        registerPendingTrajectoryDelivery({
-          runId: params.attempt.runId ?? "",
-          filePath,
-          commit: () => safeWriteTrajectoryFile(filePath, content),
-        });
-      })
-      .catch(() => undefined);
+    queue = queue.then(() => safeWriteTrajectoryFile(filePath, content));
   };
 
   const ensureActiveTurn = () => {
     activeTurn ??= {
       turnIndex: turns.length,
-      actions: [],
+      toolCalls: [],
       failedToolCallIds: new Set(),
       anonymousErrorCount: 0,
     };
@@ -362,7 +382,8 @@ export function createCompactTrajectoryRecorder(
         case "tool.call": {
           const name = typeof data?.name === "string" ? data.name.trim() : "";
           if (name) {
-            ensureActiveTurn().actions.push(name);
+            const turn = ensureActiveTurn();
+            turn.toolCalls.push(toActiveToolCall(data ?? {}, turn));
           }
           break;
         }
@@ -370,6 +391,7 @@ export function createCompactTrajectoryRecorder(
           recordToolFailure(ensureActiveTurn(), data);
           break;
         case "tool.result":
+          recordToolResult(ensureActiveTurn(), data);
           if (data?.success === false) {
             recordToolFailure(ensureActiveTurn(), data);
           }
@@ -383,21 +405,44 @@ export function createCompactTrajectoryRecorder(
     },
     recordModelStepStarted: ({ startedAtMs }) => {
       if (activeTurn) {
-        turns.push(buildTurnRecord(activeTurn, undefined, undefined));
+        turns.push(buildTurnRecord(activeTurn, { messages, contextRefs, instruction }));
       }
       activeTurn = {
         turnIndex: turns.length,
         startedAtMs,
-        actions: [],
+        toolCalls: [],
         failedToolCallIds: new Set(),
         anonymousErrorCount: 0,
       };
     },
-    recordModelResponse: ({ usage, durationMs, actionNames, errorCount }) => {
+    recordModelResponse: ({
+      usage,
+      durationMs,
+      actionNames,
+      toolCalls,
+      errorCount,
+      assistantTexts,
+      finalPromptText,
+      systemPrompt,
+    }) => {
       const turn = ensureActiveTurn();
+      const structuredToolCalls =
+        toolCalls?.flatMap((call) => {
+          const name = call.name.trim();
+          return name ? [toActiveToolCallFromInput(call, name, turn)] : [];
+        }) ?? [];
+      if (turn.toolCalls.length === 0 && structuredToolCalls.length > 0) {
+        turn.toolCalls.push(...structuredToolCalls);
+      }
       const names = actionNames?.map((name) => name.trim()).filter(Boolean) ?? [];
-      if (turn.actions.length === 0 && names.length > 0) {
-        turn.actions.push(...names);
+      if (turn.toolCalls.length === 0 && names.length > 0) {
+        turn.toolCalls.push(
+          ...names.map((name, index) => ({
+            tool_call_id: `c${turn.turnIndex}_${index}`,
+            name,
+            arguments: {},
+          })),
+        );
       }
       turn.anonymousErrorCount += normalizeInteger(errorCount) ?? 0;
       const resolvedDurationMs =
@@ -405,7 +450,18 @@ export function createCompactTrajectoryRecorder(
         (typeof turn.startedAtMs === "number"
           ? Math.max(0, Date.now() - turn.startedAtMs)
           : undefined);
-      turns.push(buildTurnRecord(turn, toTrajectoryTokenUsage(usage), resolvedDurationMs));
+      turns.push(
+        buildTurnRecord(turn, {
+          messages,
+          contextRefs,
+          instruction,
+          systemPrompt,
+          finalPromptText,
+          assistantText: assistantTexts?.join("\n\n").trim(),
+          tokenUsage: toTrajectoryTokenUsage(usage),
+          durationMs: resolvedDurationMs,
+        }),
+      );
       activeTurn = undefined;
     },
     flush: async () => {
@@ -463,11 +519,18 @@ function resolveAgent(
   attempt: CompactTrajectoryAttempt,
   env: NodeJS.ProcessEnv,
 ): TrajectoryDocument["agent"] {
-  const modelVersion = readEnvString(env, "CLAWMOBILE_TRAJECTORY_MODEL_VERSION");
   return {
     framework: "openclaw",
+    ...(readEnvString(env, "CLAWMOBILE_TRAJECTORY_FRAMEWORK_VERSION")
+      ? { framework_version: readEnvString(env, "CLAWMOBILE_TRAJECTORY_FRAMEWORK_VERSION") }
+      : {}),
     model: readEnvString(env, "CLAWMOBILE_TRAJECTORY_MODEL") ?? attempt.modelId,
-    ...(modelVersion ? { model_version: modelVersion } : {}),
+    ...(readEnvString(env, "CLAWMOBILE_TRAJECTORY_MODEL_VERSION")
+      ? { model_version: readEnvString(env, "CLAWMOBILE_TRAJECTORY_MODEL_VERSION") }
+      : {}),
+    ...(parseJsonObject(readEnvString(env, "CLAWMOBILE_TRAJECTORY_AGENT_CONFIG"))
+      ? { config: parseJsonObject(readEnvString(env, "CLAWMOBILE_TRAJECTORY_AGENT_CONFIG")) }
+      : {}),
   };
 }
 
@@ -490,6 +553,18 @@ function resolveTrajectoryId(params: {
     8,
   );
   return `traj_${date}_${safeTrajectoryFileName(params.taskId).slice(0, 32)}_${shortId}`;
+}
+
+function resolveParsedParams(env: NodeJS.ProcessEnv): Array<Record<string, unknown>> | undefined {
+  const parsed = parseJsonValue(readEnvString(env, "CLAWMOBILE_TRAJECTORY_PARSED_PARAMS"));
+  if (!Array.isArray(parsed)) {
+    return undefined;
+  }
+  return parsed.flatMap((item) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? [item as Record<string, unknown>]
+      : [],
+  );
 }
 
 function resolveOutcome(
@@ -537,26 +612,269 @@ function recordToolFailure(turn: ActiveTurn, data: Record<string, unknown> | und
   }
 }
 
+function recordToolResult(turn: ActiveTurn, data: Record<string, unknown> | undefined): void {
+  const toolCallId = typeof data?.toolCallId === "string" ? data.toolCallId.trim() : "";
+  const call = toolCallId
+    ? turn.toolCalls.find((entry) => entry.tool_call_id === toolCallId)
+    : undefined;
+  if (!call) {
+    return;
+  }
+  call.success = data?.success === false ? false : true;
+  const errorText = readString(data?.error);
+  if (errorText) {
+    call.error = errorText;
+  }
+  const latencyMs = normalizeInteger(data?.latencyMs ?? data?.durationMs);
+  if (typeof latencyMs === "number") {
+    call.latencyMs = latencyMs;
+  }
+  const resultText =
+    readString(data?.contentPreview) ?? readString(data?.text) ?? readString(data?.result);
+  if (resultText) {
+    call.resultText = resultText;
+  }
+}
+
+function toActiveToolCall(data: Record<string, unknown>, turn: ActiveTurn): ActiveToolCall {
+  const name = readString(data.name) ?? "tool";
+  return {
+    tool_call_id:
+      readString(data.toolCallId) ??
+      readString(data.tool_call_id) ??
+      `c${turn.turnIndex}_${turn.toolCalls.length}`,
+    name,
+    arguments: data.arguments ?? {},
+  };
+}
+
+function toActiveToolCallFromInput(
+  call: CompactTrajectoryToolCallInput,
+  name: string,
+  turn: ActiveTurn,
+): ActiveToolCall {
+  const result: ActiveToolCall = {
+    tool_call_id: call.toolCallId?.trim() || `c${turn.turnIndex}_${turn.toolCalls.length}`,
+    name,
+    arguments: call.arguments ?? {},
+  };
+  if (typeof call.success === "boolean") {
+    result.success = call.success;
+  }
+  const error = call.error?.trim();
+  if (error) {
+    result.error = error;
+  }
+  const latencyMs = normalizeInteger(call.latencyMs);
+  if (typeof latencyMs === "number") {
+    result.latencyMs = latencyMs;
+  }
+  const resultText = call.resultText?.trim();
+  if (resultText) {
+    result.resultText = resultText;
+  }
+  return result;
+}
+
 function buildTurnRecord(
   turn: ActiveTurn,
-  tokenUsage?: TrajectoryTokenUsage,
-  durationMs?: number,
+  params: {
+    messages: Record<string, TrajectoryMessage>;
+    contextRefs: string[];
+    instruction?: string;
+    systemPrompt?: string;
+    finalPromptText?: string;
+    assistantText?: string;
+    tokenUsage?: TrajectoryTokenUsage;
+    durationMs?: number;
+  },
 ): TrajectoryTurn {
+  const systemPrompt = params.systemPrompt?.trim();
+  if (systemPrompt) {
+    params.messages.m_sys ??= { role: "system", text: systemPrompt };
+    appendUnique(params.contextRefs, "m_sys");
+  }
+  const userText = params.finalPromptText?.trim() || params.instruction?.trim();
+  if (userText) {
+    params.messages.m_task ??= { role: "user", text: userText };
+    appendUnique(params.contextRefs, "m_task");
+  }
+  const context = [...params.contextRefs];
+  const outputRef = `m_t${turn.turnIndex}_out`;
+  const toolCalls = turn.toolCalls;
+  params.messages[outputRef] = {
+    role: "assistant",
+    ...(params.assistantText ? { assistant_text: params.assistantText } : {}),
+    ...(toolCalls.length > 0 ? { tool_calls: toolCalls.map(toTrajectoryToolCallMessage) } : {}),
+  };
+  for (let index = 0; index < toolCalls.length; index += 1) {
+    writeToolResultMessage({
+      call: toolCalls[index],
+      turnIndex: turn.turnIndex,
+      toolIndex: index,
+      messages: params.messages,
+    });
+  }
+  const execution = toolCalls.map((call, index): TrajectoryExecution => {
+    const failed =
+      call.success === false ||
+      turn.failedToolCallIds.has(call.tool_call_id) ||
+      index < turn.anonymousErrorCount;
+    const resultRef = buildToolResultMessageRef(turn.turnIndex, index);
+    const action = toTrajectoryAction(call.name, call.arguments);
+    return {
+      tool_call_id: call.tool_call_id,
+      status: failed ? "error" : "ok",
+      ...(failed ? { error: call.error ?? "tool execution failed" } : {}),
+      ...(typeof call.latencyMs === "number" ? { latency_ms: call.latencyMs } : {}),
+      ...(params.messages[resultRef] ? { result_ref: resultRef } : {}),
+      ...(action ? { action } : {}),
+    };
+  });
+  appendUnique(params.contextRefs, outputRef);
+  for (let index = 0; index < toolCalls.length; index += 1) {
+    const resultRef = buildToolResultMessageRef(turn.turnIndex, index);
+    if (params.messages[resultRef]) {
+      appendUnique(params.contextRefs, resultRef);
+    }
+  }
   return {
     turn_index: turn.turnIndex,
-    actions: turn.actions,
-    error_count: turn.failedToolCallIds.size + turn.anonymousErrorCount,
-    token_usage: tokenUsage ?? { input: 0, output: 0 },
-    ...(typeof durationMs === "number" ? { duration_ms: durationMs } : {}),
+    ...(typeof params.durationMs === "number" ? { duration_ms: params.durationMs } : {}),
+    input: { context },
+    output_ref: outputRef,
+    ...(execution.length > 0 ? { execution } : {}),
+    token_usage: params.tokenUsage ?? { input: 0, output: 0 },
+    annotations: {},
   };
+}
+
+function toTrajectoryToolCallMessage(call: ActiveToolCall): TrajectoryToolCall {
+  return {
+    tool_call_id: call.tool_call_id,
+    name: call.name,
+    arguments: call.arguments,
+  };
+}
+
+function writeToolResultMessage(params: {
+  call: ActiveToolCall | undefined;
+  turnIndex: number;
+  toolIndex: number;
+  messages: Record<string, TrajectoryMessage>;
+}): void {
+  const resultText = params.call?.resultText?.trim();
+  if (!params.call || !resultText) {
+    return;
+  }
+  const resultRef = buildToolResultMessageRef(params.turnIndex, params.toolIndex);
+  params.messages[resultRef] = {
+    role: "tool",
+    tool_call_id: params.call.tool_call_id,
+    text: resultText,
+  };
+}
+
+function buildToolResultMessageRef(turnIndex: number, toolIndex: number): string {
+  return `m_t${turnIndex}_res${toolIndex === 0 ? "" : `_${toolIndex}`}`;
+}
+
+function appendUnique(values: string[], value: string): void {
+  if (!values.includes(value)) {
+    values.push(value);
+  }
+}
+
+function toTrajectoryAction(
+  name: string,
+  args: unknown,
+): TrajectoryExecution["action"] | undefined {
+  const normalized = name.trim();
+  if (!ACTION_TYPES.has(normalized)) {
+    return undefined;
+  }
+  const argRecord = toRecord(args);
+  const target = buildTrajectoryTarget(argRecord);
+  const coord = buildTrajectoryCoord(argRecord);
+  const inputValue =
+    readString(argRecord.input_value) ??
+    (normalized === "type"
+      ? (readString(argRecord.text) ?? readString(argRecord.value) ?? readString(argRecord.input))
+      : undefined);
+  const inputSourceParam = readString(argRecord.input_source_param);
+  const rawCommand =
+    readString(argRecord.raw_command) ??
+    readString(argRecord.rawCommand) ??
+    readString(argRecord.command) ??
+    readString(argRecord.adb_command);
+  return {
+    type: normalized as NonNullable<TrajectoryExecution["action"]>["type"],
+    ...(target ? { target } : {}),
+    ...(coord ? { coord } : {}),
+    ...(inputValue ? { input_value: inputValue } : {}),
+    ...(inputSourceParam ? { input_source_param: inputSourceParam } : {}),
+    ...(rawCommand ? { raw_command: rawCommand } : {}),
+  };
+}
+
+function buildTrajectoryTarget(
+  args: Record<string, unknown>,
+): NonNullable<NonNullable<TrajectoryExecution["action"]>["target"]> | undefined {
+  const target = {
+    ...(readString(args.resource_id) ? { resource_id: readString(args.resource_id) } : {}),
+    ...(readString(args.resourceId) ? { resource_id: readString(args.resourceId) } : {}),
+    ...(readString(args.bounds) ? { bounds: readString(args.bounds) } : {}),
+    ...(readString(args.text) ? { text: readString(args.text) } : {}),
+    ...(readString(args.class) ? { class: readString(args.class) } : {}),
+    ...(readString(args.className) ? { class: readString(args.className) } : {}),
+  };
+  return Object.keys(target).length > 0 ? target : undefined;
+}
+
+function buildTrajectoryCoord(
+  args: Record<string, unknown>,
+): NonNullable<NonNullable<TrajectoryExecution["action"]>["coord"]> | undefined {
+  const px = toPoint(args.px) ?? toPointFromKeys(args, "x", "y");
+  const normalized =
+    toPoint(args.normalized) ??
+    toPointFromKeys(args, "normalized_x", "normalized_y") ??
+    toPointFromKeys(args, "x_norm", "y_norm");
+  const coord = {
+    ...(px ? { px } : {}),
+    ...(normalized ? { normalized } : {}),
+  };
+  return Object.keys(coord).length > 0 ? coord : undefined;
+}
+
+function toPoint(value: unknown): { x?: number; y?: number } | undefined {
+  const record = toRecord(value);
+  return toPointFromKeys(record, "x", "y");
+}
+
+function toPointFromKeys(
+  record: Record<string, unknown>,
+  xKey: string,
+  yKey: string,
+): { x?: number; y?: number } | undefined {
+  const x = readNumber(record[xKey]);
+  const y = readNumber(record[yKey]);
+  const point = {
+    ...(typeof x === "number" ? { x } : {}),
+    ...(typeof y === "number" ? { y } : {}),
+  };
+  return Object.keys(point).length > 0 ? point : undefined;
 }
 
 function buildRollups(turns: TrajectoryTurn[]): TrajectoryDocument["rollups"] {
   const totalDuration = turns.reduce((sum, turn) => sum + (turn.duration_ms ?? 0), 0);
   return {
     total_turns: turns.length,
-    total_actions: turns.reduce((sum, turn) => sum + turn.actions.length, 0),
-    total_errors: turns.reduce((sum, turn) => sum + turn.error_count, 0),
+    total_actions: turns.reduce((sum, turn) => sum + (turn.execution?.length ?? 0), 0),
+    total_errors: turns.reduce(
+      (sum, turn) =>
+        sum + (turn.execution?.filter((execution) => execution.status === "error").length ?? 0),
+      0,
+    ),
     total_tokens: {
       input: turns.reduce((sum, turn) => sum + turn.token_usage.input, 0),
       output: turns.reduce((sum, turn) => sum + turn.token_usage.output, 0),
@@ -574,6 +892,21 @@ function toTrajectoryTokenUsage(usage: CompactTrajectoryUsage | undefined): Traj
     output: normalizeInteger(usage?.output) ?? 0,
     ...(typeof cached === "number" ? { cached } : {}),
   };
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readString(value: unknown): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text ? text : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function readEnvString(env: NodeJS.ProcessEnv, key: string): string | undefined {
@@ -606,18 +939,22 @@ function parseTerminationReason(
     : undefined;
 }
 
-function parseJsonObject(value: string | undefined): Record<string, unknown> | undefined {
+function parseJsonValue(value: string | undefined): unknown {
   if (!value) {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
+    return JSON.parse(value) as unknown;
   } catch {
     return undefined;
   }
+}
+
+function parseJsonObject(value: string | undefined): Record<string, unknown> | undefined {
+  const parsed = parseJsonValue(value);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : undefined;
 }
 
 function normalizeInteger(value: unknown): number | undefined {

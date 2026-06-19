@@ -50,6 +50,8 @@ export type ReplyPayload = {
 
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** Source agent run id. Channel adapters can use this to finalize per-run side effects. */
+  sourceRunId?: string;
   /** Epoch ms for the source agent run. Channel adapters can use this for late e2e timing. */
   sourceRunStartedAtMs?: number;
   /**

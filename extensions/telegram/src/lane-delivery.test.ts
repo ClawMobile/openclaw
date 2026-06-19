@@ -26,6 +26,11 @@ function createHarness(params?: {
   splitFinalTextForPreview?: (text: string) => readonly string[];
   nowMs?: number;
   sourceRunStartedAtMs?: number;
+  onFinalAnswerDelivered?: (params: {
+    payload: ReplyPayload;
+    text: string;
+    result: LaneDeliveryResult;
+  }) => Promise<void> | void;
 }) {
   const answer =
     params?.answerStream ??
@@ -83,6 +88,7 @@ function createHarness(params?: {
     markDelivered,
     now: params?.nowMs != null ? () => params.nowMs! : undefined,
     sourceRunStartedAtMs: params?.sourceRunStartedAtMs,
+    onFinalAnswerDelivered: params?.onFinalAnswerDelivered,
   });
 
   return {
@@ -205,6 +211,34 @@ describe("createLaneTextDeliverer", () => {
       }),
     );
     expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
+  it("notifies final answer delivery after adding elapsed source run time", async () => {
+    const onFinalAnswerDelivered = vi.fn();
+    const harness = createHarness({
+      answerMessageId: 999,
+      nowMs: 12_345,
+      onFinalAnswerDelivered,
+    });
+    const payload = setReplyPayloadMetadata(
+      { text: HELLO_FINAL },
+      { sourceRunId: "run-1", sourceRunStartedAtMs: 10_000 },
+    );
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: HELLO_FINAL,
+      payload,
+      infoKind: "final",
+    });
+
+    const expectedText = `[Time: 2.35 s]\n\n${HELLO_FINAL}`;
+    expect(expectPreviewFinalized(result)).toEqual({ content: expectedText, messageId: 999 });
+    expect(onFinalAnswerDelivered).toHaveBeenCalledWith({
+      payload,
+      text: expectedText,
+      result,
+    });
   });
 
   it("prefixes finalized answer preview edits from lane timing when payload metadata is absent", async () => {

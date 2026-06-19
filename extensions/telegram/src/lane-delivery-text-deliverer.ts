@@ -117,6 +117,11 @@ type CreateLaneTextDelivererParams = {
   // since the active preview was created, even if the preview is younger
   // than the long-lived threshold (#76529).
   getLastVisibleNonPreviewDeliveryAtMs?: () => number | undefined;
+  onFinalAnswerDelivered?: (params: {
+    payload: ReplyPayload;
+    text: string;
+    result: LaneDeliveryResult;
+  }) => Promise<void> | void;
 };
 
 type DeliverLaneTextParams = {
@@ -633,6 +638,18 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       deliveryText.length > 0 &&
       deliveryText.length <= params.draftMaxChars &&
       !payload.isError;
+    const noteFinalAnswerDelivered = async (
+      deliveryResult: LaneDeliveryResult,
+    ): Promise<LaneDeliveryResult> => {
+      if (laneName === "answer" && deliveryResult.kind !== "skipped") {
+        await params.onFinalAnswerDelivered?.({
+          payload,
+          text: deliveryText,
+          result: deliveryResult,
+        });
+      }
+      return deliveryResult;
+    };
 
     if (infoKind === "final") {
       // Transient previews must decide cleanup retention per final attempt.
@@ -650,7 +667,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           canEditViaPreview,
         });
         if (archivedResult) {
-          return archivedResult;
+          return await noteFinalAnswerDelivered(archivedResult);
         }
       }
       if (canEditViaPreview && params.activePreviewLifecycleByLane[laneName] === "transient") {
@@ -664,7 +681,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             canEditViaPreview,
           });
           if (archivedResultAfterFlush) {
-            return archivedResultAfterFlush;
+            return await noteFinalAnswerDelivered(archivedResultAfterFlush);
           }
         }
         if (shouldUseFreshFinalForLane(lane)) {
@@ -674,7 +691,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           );
           if (delivered) {
             await clearActivePreviewAfterFreshFinal(lane, laneName);
-            return result("sent");
+            return await noteFinalAnswerDelivered(result("sent"));
           }
         }
         const previewMessageId = lane.stream?.messageId();
@@ -689,21 +706,25 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         });
         if (finalized === "edited") {
           markActivePreviewComplete(laneName);
-          return result("preview-finalized", {
-            content: deliveryText,
-            messageId: previewMessageId ?? lane.stream?.messageId(),
-          });
+          return await noteFinalAnswerDelivered(
+            result("preview-finalized", {
+              content: deliveryText,
+              messageId: previewMessageId ?? lane.stream?.messageId(),
+            }),
+          );
         }
         if (finalized === "regressive-skipped") {
           markActivePreviewComplete(laneName);
-          return result("preview-finalized", {
-            content: lane.lastPartialText,
-            messageId: previewMessageId ?? lane.stream?.messageId(),
-          });
+          return await noteFinalAnswerDelivered(
+            result("preview-finalized", {
+              content: lane.lastPartialText,
+              messageId: previewMessageId ?? lane.stream?.messageId(),
+            }),
+          );
         }
         if (finalized === "retained") {
           markActivePreviewComplete(laneName);
-          return result("preview-retained");
+          return await noteFinalAnswerDelivered(result("preview-retained"));
         }
       } else if (!hasMedia && !payload.isError && deliveryText.length > params.draftMaxChars) {
         const longFinalResult = await tryDeliverLongFinalThroughPreview({
@@ -714,7 +735,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           previewButtons,
         });
         if (longFinalResult) {
-          return longFinalResult;
+          return await noteFinalAnswerDelivered(longFinalResult);
         }
         params.log(
           `telegram: preview final too long for edit (${deliveryText.length} > ${params.draftMaxChars}); falling back to standard send`,
@@ -722,7 +743,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       await params.stopDraftLane(lane);
       const delivered = await params.sendPayload(params.applyTextToPayload(payload, deliveryText));
-      return delivered ? result("sent") : result("skipped");
+      return await noteFinalAnswerDelivered(delivered ? result("sent") : result("skipped"));
     }
 
     if (allowPreviewUpdateForNonFinal && canEditViaPreview) {

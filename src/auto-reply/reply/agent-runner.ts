@@ -99,12 +99,14 @@ const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 function markSourceReplyTimingPayloads(
   payloads: ReplyPayload[],
   startedAtMs: number,
+  runId: string,
 ): ReplyPayload[] {
   return payloads.map((payload) => {
     if (payload.isError === true || payload.isReasoning === true || !payload.text?.trim()) {
       return payload;
     }
     return setReplyPayloadMetadata(payload, {
+      sourceRunId: runId,
       sourceRunStartedAtMs: startedAtMs,
     });
   });
@@ -1605,7 +1607,7 @@ export async function runReplyAgent(params: {
     }
 
     // If verbose is enabled, prepend operational run notices.
-    let finalPayloads = markSourceReplyTimingPayloads(guardedReplyPayloads, runStartedAt);
+    let finalPayloads = markSourceReplyTimingPayloads(guardedReplyPayloads, runStartedAt, runId);
     const verboseNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {

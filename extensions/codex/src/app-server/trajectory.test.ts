@@ -4,7 +4,9 @@ import path from "node:path";
 import Ajv2020 from "ajv/dist/2020";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  clearPendingCodexTrajectoryDeliveriesForTesting,
   createCodexTrajectoryRecorder,
+  flushPendingCodexTrajectoryForRunId,
   recordCodexTrajectoryModelRequest,
   recordCodexTrajectoryModelResponse,
   recordCodexTrajectoryModelStepStarted,
@@ -48,6 +50,7 @@ function expectSchemaValid(document: unknown): void {
 }
 
 afterEach(() => {
+  clearPendingCodexTrajectoryDeliveriesForTesting();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -161,6 +164,11 @@ describe("Codex benchmark trajectory collector", () => {
     await recorder?.flush();
 
     const filePath = path.join(tmpDir, "traj_test_run.json");
+    expect(fs.existsSync(filePath)).toBe(false);
+    await expect(flushPendingCodexTrajectoryForRunId("run-1")).resolves.toMatchObject({
+      flushed: true,
+      filePath,
+    });
     const content = fs.readFileSync(filePath, "utf8");
     const trajectory = JSON.parse(content) as {
       schema_version: string;
@@ -254,6 +262,9 @@ describe("Codex benchmark trajectory collector", () => {
     });
     recorder?.recordEvent("session.ended", { status: "success" });
     await recorder?.flush();
+    await expect(flushPendingCodexTrajectoryForRunId("run-1")).resolves.toMatchObject({
+      flushed: true,
+    });
 
     const trajectory = readTrajectory(path.join(tmpDir, "traj_no_action.json")) as {
       turns: Array<{ actions: string[] }>;
@@ -279,6 +290,9 @@ describe("Codex benchmark trajectory collector", () => {
 
     recorder?.recordEvent("session.ended", { aborted: true });
     await recorder?.flush();
+    await expect(flushPendingCodexTrajectoryForRunId("run-1")).resolves.toMatchObject({
+      flushed: true,
+    });
 
     const trajectory = readTrajectory(path.join(tmpDir, "traj_abort.json")) as {
       outcome: { success: boolean; termination_reason: string };

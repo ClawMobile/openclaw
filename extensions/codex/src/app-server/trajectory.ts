@@ -98,6 +98,16 @@ type ActiveTurn = {
   anonymousErrorCount: number;
 };
 
+type PendingCodexTrajectoryDelivery = {
+  filePath: string;
+  registeredAtMs: number;
+  commit: () => Promise<void>;
+};
+
+type CodexTrajectoryDeliveryRegistry = {
+  pendingByRunId: Map<string, PendingCodexTrajectoryDelivery>;
+};
+
 const TRAJECTORY_SCHEMA_VERSION = "1.0.0-v1";
 const TRAJECTORY_FILE_MAX_BYTES = 5 * 1024 * 1024;
 const VALID_TERMINATION_REASONS = new Set<TrajectoryTerminationReason>([
@@ -108,6 +118,11 @@ const VALID_TERMINATION_REASONS = new Set<TrajectoryTerminationReason>([
   "error",
   "user_abort",
 ]);
+const CODEX_TRAJECTORY_DELIVERY_REGISTRY_KEY = Symbol.for(
+  "openclaw.codexTrajectoryDeliveryRegistry.v1",
+);
+const MAX_PENDING_TRAJECTORY_DELIVERIES = 128;
+const PENDING_TRAJECTORY_DELIVERY_MAX_AGE_MS = 60 * 60 * 1000;
 
 type CodexTrajectoryOpenFlagConstants = Pick<
   typeof nodeFs.constants,
@@ -125,6 +140,77 @@ export function resolveCodexTrajectoryWriteFlags(
     constants.O_WRONLY |
     (typeof noFollow === "number" ? noFollow : 0)
   );
+}
+
+function resolveCodexTrajectoryDeliveryRegistry(): CodexTrajectoryDeliveryRegistry {
+  const globalRecord = globalThis as typeof globalThis &
+    Record<symbol, CodexTrajectoryDeliveryRegistry | undefined>;
+  globalRecord[CODEX_TRAJECTORY_DELIVERY_REGISTRY_KEY] ??= {
+    pendingByRunId: new Map(),
+  };
+  return globalRecord[CODEX_TRAJECTORY_DELIVERY_REGISTRY_KEY];
+}
+
+function prunePendingCodexTrajectoryDeliveries(
+  registry: CodexTrajectoryDeliveryRegistry,
+  nowMs = Date.now(),
+): void {
+  for (const [runId, pending] of registry.pendingByRunId) {
+    if (nowMs - pending.registeredAtMs > PENDING_TRAJECTORY_DELIVERY_MAX_AGE_MS) {
+      registry.pendingByRunId.delete(runId);
+    }
+  }
+  while (registry.pendingByRunId.size > MAX_PENDING_TRAJECTORY_DELIVERIES) {
+    const oldest = registry.pendingByRunId.keys().next().value;
+    if (!oldest) {
+      return;
+    }
+    registry.pendingByRunId.delete(oldest);
+  }
+}
+
+function registerPendingCodexTrajectoryDelivery(params: {
+  runId: string;
+  filePath: string;
+  commit: () => Promise<void>;
+}): void {
+  const runId = params.runId.trim();
+  if (!runId) {
+    return;
+  }
+  const registry = resolveCodexTrajectoryDeliveryRegistry();
+  prunePendingCodexTrajectoryDeliveries(registry);
+  registry.pendingByRunId.set(runId, {
+    filePath: params.filePath,
+    registeredAtMs: Date.now(),
+    commit: params.commit,
+  });
+}
+
+export async function flushPendingCodexTrajectoryForRunId(
+  runId: string | undefined,
+): Promise<{ flushed: boolean; filePath?: string; error?: unknown }> {
+  const normalizedRunId = runId?.trim();
+  if (!normalizedRunId) {
+    return { flushed: false };
+  }
+  const registry = resolveCodexTrajectoryDeliveryRegistry();
+  const pending = registry.pendingByRunId.get(normalizedRunId);
+  if (!pending) {
+    return { flushed: false };
+  }
+  registry.pendingByRunId.delete(normalizedRunId);
+  try {
+    await pending.commit();
+    return { flushed: true, filePath: pending.filePath };
+  } catch (error) {
+    registry.pendingByRunId.set(normalizedRunId, pending);
+    return { flushed: false, filePath: pending.filePath, error };
+  }
+}
+
+export function clearPendingCodexTrajectoryDeliveriesForTesting(): void {
+  resolveCodexTrajectoryDeliveryRegistry().pendingByRunId.clear();
 }
 
 async function assertNoSymlinkParents(filePath: string): Promise<void> {
@@ -248,7 +334,15 @@ export function createCodexTrajectoryRecorder(
       rollups: buildRollups(turns),
     };
     const content = `${JSON.stringify(document, null, 2)}\n`;
-    queue = queue.then(() => safeWriteTrajectoryFile(filePath, content)).catch(() => undefined);
+    queue = queue
+      .then(() => {
+        registerPendingCodexTrajectoryDelivery({
+          runId: params.attempt.runId,
+          filePath,
+          commit: () => safeWriteTrajectoryFile(filePath, content),
+        });
+      })
+      .catch(() => undefined);
   };
 
   const ensureActiveTurn = () => {

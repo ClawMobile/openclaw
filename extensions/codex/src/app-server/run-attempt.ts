@@ -107,8 +107,6 @@ import {
   type CodexTrajectoryToolCallSummary,
   createCodexTrajectoryRecorder,
   normalizeCodexTrajectoryError,
-  recordCodexTrajectoryCompletion,
-  recordCodexTrajectoryContext,
   recordCodexTrajectoryModelRequest,
   recordCodexTrajectoryModelResponse,
   recordCodexTrajectoryModelStepStarted,
@@ -694,15 +692,6 @@ export async function runCodexAppServerAttempt(
     toolCount: toolBridge.specs.length,
     startedAtMs: attemptStartedAt,
   });
-  recordCodexTrajectoryContext(trajectoryRecorder, {
-    attempt: params,
-    cwd: effectiveWorkspace,
-    developerInstructions: promptBuild.developerInstructions,
-    prompt: promptBuild.prompt,
-    historyMessages,
-    tools: toolBridge.specs,
-  });
-
   let projector: CodexAppServerEventProjector | undefined;
   let turnId: string | undefined;
   const pendingNotifications: CodexServerNotification[] = [];
@@ -1039,7 +1028,6 @@ export async function runCodexAppServerAttempt(
         name: call.tool,
         success: response.success,
         latencyMs: toolLatencyMs,
-        contentItems: response.contentItems,
       });
       emitCodexAppServerEvent(params, {
         stream: "tool",
@@ -1111,7 +1099,6 @@ export async function runCodexAppServerAttempt(
       historyMessages,
       imagesCount: params.images?.length ?? 0,
       tools: toolBridge.specs,
-      runtimeRequest: turnStartParams,
     });
     turn = assertCodexTurnStartResponse(
       await client.request("turn/start", turnStartParams, {
@@ -1190,12 +1177,6 @@ export async function runCodexAppServerAttempt(
     turnId: activeTurnId,
     signal: runAbortController.signal,
   });
-  trajectoryRecorder?.recordEvent("prompt.submitted", {
-    threadId: thread.threadId,
-    turnId: activeTurnId,
-    prompt: promptBuild.prompt,
-    imagesCount: params.images?.length ?? 0,
-  });
   projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId);
   emitLifecycleStart();
   const activeProjector = projector;
@@ -1265,14 +1246,6 @@ export async function runCodexAppServerAttempt(
         ? "codex app-server attempt timed out"
         : result.promptError;
     const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
-    recordCodexTrajectoryCompletion(trajectoryRecorder, {
-      attempt: params,
-      result,
-      threadId: thread.threadId,
-      turnId: activeTurnId,
-      timedOut,
-      yieldDetected,
-    });
     const modelStepRuntimeLatencyMs =
       typeof trajectoryModelStepStartedAtMs === "number"
         ? Math.max(0, Date.now() - trajectoryModelStepStartedAtMs)
@@ -1312,7 +1285,6 @@ export async function runCodexAppServerAttempt(
       yieldDetected,
       aborted: finalAborted,
       promptError: normalizeCodexTrajectoryError(finalPromptError),
-      finalAssistantText: collectTerminalAssistantText(result),
       e2eLatencyMs,
       modelLatencyMs: null,
       modelAndRuntimeLatencyMs: observedModelAndRuntimeLatencyMs,

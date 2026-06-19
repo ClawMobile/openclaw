@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clawmobile.ae/schemas/trajectory.schema.json",
+  "title": "ClawMobile Benchmark Trajectory (v1, clean)",
+  "description": "v1 干净版，只支撑功能 1：完成率、步数、token 成本。每个 turn 只记可计数的最小信息（动作名、token）。trace（消息/观测/grounding）留到后续功能时作为新字段增量加入。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "trajectory_id",
+    "task_id",
+    "agent",
+    "turns",
+    "outcome",
+    "rollups"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string" },
+    "trajectory_id": { "type": "string", "description": "本次运行唯一 id。" },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "运行开始时间（可选，便于按时间看指标）。"
+    },
+
+    "task_id": {
+      "type": "string",
+      "description": "任务模板稳定 key。同一任务多次运行共享——按任务统计完成率的前提。"
+    },
+    "instruction": { "type": "string", "description": "可选：自然语言指令，方便人读日志。" },
+
+    "agent": {
+      "type": "object",
+      "description": "被评测 agent。model 用于 token→成本换算、并避免跨模型混算。",
+      "required": ["model"],
+      "additionalProperties": false,
+      "properties": {
+        "framework": { "type": "string" },
+        "model": { "type": "string" },
+        "model_version": { "type": "string" }
+      }
+    },
+
+    "turns": {
+      "type": "array",
+      "description": "按推理顺序的瘦记录。功能 1 用它数步数、汇总 token；rollups 即由它聚合而来。",
+      "items": { "$ref": "#/$defs/turn" }
+    },
+
+    "outcome": {
+      "type": "object",
+      "description": "完成率来源。",
+      "required": ["success", "termination_reason"],
+      "additionalProperties": false,
+      "properties": {
+        "success": { "type": "boolean", "description": "checker 给的最终成功标签。" },
+        "termination_reason": {
+          "type": "string",
+          "enum": ["success", "max_steps", "crash", "refused", "error", "user_abort"]
+        },
+        "checker_output": {
+          "type": "object",
+          "description": "可选：checker 依据，便于复核完成率是否可信。",
+          "properties": {
+            "passed_subconditions": { "type": "array", "items": { "type": "string" } },
+            "failed_subconditions": { "type": "array", "items": { "type": "string" } },
+            "evidence": {}
+          }
+        }
+      }
+    },
+
+    "rollups": {
+      "type": "object",
+      "description": "功能 1 的主读取面，全部可由 turns 重算。",
+      "required": ["total_turns", "total_actions", "total_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "total_turns": { "type": "integer", "description": "模型推理次数。" },
+        "total_actions": { "type": "integer", "description": "工具调用总数（步数）。" },
+        "total_errors": { "type": "integer", "description": "失败调用总数，做错误率。" },
+        "total_tokens": {
+          "type": "object",
+          "required": ["input", "output"],
+          "properties": { "input": { "type": "integer" }, "output": { "type": "integer" } }
+        },
+        "total_cost_usd": { "type": "number" },
+        "total_duration_ms": { "type": "integer" }
+      }
+    }
+  },
+
+  "$defs": {
+    "turn": {
+      "type": "object",
+      "required": ["turn_index", "token_usage"],
+      "additionalProperties": false,
+      "properties": {
+        "turn_index": { "type": "integer", "description": "全局单调序号。" },
+        "actions": {
+          "type": "array",
+          "description": "本轮发出的工具调用名（给出动作序列与计数）。纯思考轮为空。",
+          "items": { "type": "string" }
+        },
+        "error_count": { "type": "integer", "description": "本轮失败调用数。" },
+        "token_usage": {
+          "type": "object",
+          "description": "本轮一次推理的 token 账单。功能 1 的成本来源。",
+          "required": ["input", "output"],
+          "properties": {
+            "input": { "type": "integer" },
+            "output": { "type": "integer" },
+            "cached": { "type": "integer" }
+          }
+        },
+        "duration_ms": { "type": "integer", "description": "本轮总墙钟（可选）。" }
+      }
+    }
+  }
+}

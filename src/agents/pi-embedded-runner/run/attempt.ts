@@ -38,6 +38,7 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { createCompactTrajectoryRecorder } from "../../../trajectory/compact.js";
 import {
   buildTrajectoryArtifacts,
   buildTrajectoryRunMetadata,
@@ -1366,6 +1367,9 @@ export async function runEmbeddedAttempt(
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
     let trajectoryEndRecorded = false;
+    let compactTrajectoryRecorder: ReturnType<typeof createCompactTrajectoryRecorder> | null = null;
+    let compactTrajectoryEndRecorded = false;
+    let compactTrajectoryPromptStartedAtMs: number | undefined;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -1763,6 +1767,17 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
+      });
+      compactTrajectoryRecorder = createCompactTrajectoryRecorder({
+        cwd: effectiveWorkspace,
+        env: process.env,
+        attempt: {
+          runId: params.runId,
+          sessionId: activeSession.sessionId,
+          sessionKey: params.sessionKey,
+          modelId: params.modelId,
+          prompt: params.prompt,
+        },
       });
       trajectoryRecorder?.recordEvent("session.started", {
         trigger: params.trigger,
@@ -2550,6 +2565,8 @@ export async function runEmbeddedAttempt(
       let skipPromptSubmission = false;
       try {
         const promptStartedAt = Date.now();
+        compactTrajectoryPromptStartedAtMs = promptStartedAt;
+        compactTrajectoryRecorder?.recordModelStepStarted({ startedAtMs: promptStartedAt });
         if (emptyExplicitToolAllowlistError) {
           promptError = emptyExplicitToolAllowlistError;
           promptErrorSource = "precheck";
@@ -3471,6 +3488,19 @@ export async function runEmbeddedAttempt(
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
+      const compactTrajectoryActionNames = [
+        ...toolMetasNormalized.map((entry) => entry.toolName),
+        ...clientToolCallSlots.flatMap((slot) => (slot.completed ? [slot.name] : [])),
+      ].filter((name): name is string => typeof name === "string" && name.trim().length > 0);
+      compactTrajectoryRecorder?.recordModelResponse({
+        usage: attemptUsage,
+        durationMs:
+          typeof compactTrajectoryPromptStartedAtMs === "number"
+            ? Math.max(0, Date.now() - compactTrajectoryPromptStartedAtMs)
+            : undefined,
+        actionNames: compactTrajectoryActionNames,
+        errorCount: promptError || getLastToolError?.() ? 1 : 0,
+      });
       trajectoryRecorder?.recordEvent("model.completed", {
         aborted,
         externalAbort,
@@ -3514,7 +3544,7 @@ export async function runEmbeddedAttempt(
           lastToolError: getLastToolError?.(),
         }),
       );
-      trajectoryRecorder?.recordEvent("session.ended", {
+      const compactTrajectoryEndData = {
         status: promptError ? "error" : aborted || timedOut ? "interrupted" : "success",
         aborted,
         externalAbort,
@@ -3523,8 +3553,11 @@ export async function runEmbeddedAttempt(
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
-      });
+      };
+      trajectoryRecorder?.recordEvent("session.ended", compactTrajectoryEndData);
       trajectoryEndRecorded = true;
+      compactTrajectoryRecorder?.recordEvent("session.ended", compactTrajectoryEndData);
+      compactTrajectoryEndRecorded = true;
 
       const completedClientToolCalls = clientToolCallSlots.flatMap((slot) =>
         slot.completed && slot.params
@@ -3597,6 +3630,18 @@ export async function runEmbeddedAttempt(
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
         });
       }
+      if (compactTrajectoryRecorder && !compactTrajectoryEndRecorded) {
+        compactTrajectoryRecorder.recordEvent("session.ended", {
+          status: promptError ? "error" : aborted || timedOut ? "interrupted" : "cleanup",
+          aborted,
+          externalAbort,
+          timedOut,
+          idleTimedOut,
+          timedOutDuringCompaction,
+          timedOutDuringToolExecution,
+          promptError: promptError ? formatErrorMessage(promptError) : undefined,
+        });
+      }
       await runAgentCleanupStep({
         runId: params.runId,
         sessionId: params.sessionId,
@@ -3604,6 +3649,7 @@ export async function runEmbeddedAttempt(
         log,
         cleanup: async () => {
           await trajectoryRecorder?.flush();
+          await compactTrajectoryRecorder?.flush();
         },
       });
       // Always tear down the session (and release the lock) before we leave this attempt.

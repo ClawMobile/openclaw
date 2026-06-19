@@ -2,38 +2,40 @@ import { randomUUID } from "node:crypto";
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness";
-import { resolveUserPath } from "openclaw/plugin-sdk/agent-harness";
+import { resolveUserPath } from "../utils.js";
 
-export type CodexTrajectoryToolCallSummary = {
-  toolCallId: string;
-  name: string;
-  arguments?: unknown;
+type CompactTrajectoryAttempt = {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  modelId: string;
+  prompt?: string;
+  taskId?: string;
+  instruction?: string;
 };
 
-type CodexTrajectoryRecorder = {
+type CompactTrajectoryUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+};
+
+type CompactTrajectoryRecorder = {
   filePath: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   recordModelStepStarted: (params: { startedAtMs: number }) => void;
   recordModelResponse: (params: {
-    result: EmbeddedRunAttemptResult;
-    runtimeLatencyMs?: number;
-    modelAndRuntimeLatencyMs?: number;
-    toolCalls: CodexTrajectoryToolCallSummary[];
+    usage?: CompactTrajectoryUsage;
+    durationMs?: number;
+    actionNames?: string[];
+    errorCount?: number;
   }) => void;
   flush: () => Promise<void>;
 };
 
-type CodexTrajectoryInit = {
-  attempt: EmbeddedRunAttemptParams;
+type CompactTrajectoryInit = {
+  attempt: CompactTrajectoryAttempt;
   cwd: string;
-  developerInstructions?: string;
-  prompt?: string;
-  historyMessages?: unknown[];
-  tools?: Array<{ name?: string; description?: string; inputSchema?: unknown }>;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -98,14 +100,14 @@ type ActiveTurn = {
   anonymousErrorCount: number;
 };
 
-type PendingCodexTrajectoryDelivery = {
+type PendingTrajectoryDelivery = {
   filePath: string;
   registeredAtMs: number;
   commit: () => Promise<void>;
 };
 
-type CodexTrajectoryDeliveryRegistry = {
-  pendingByRunId: Map<string, PendingCodexTrajectoryDelivery>;
+type TrajectoryDeliveryRegistry = {
+  pendingByRunId: Map<string, PendingTrajectoryDelivery>;
 };
 
 const TRAJECTORY_SCHEMA_VERSION = "1.0.0-v1";
@@ -118,20 +120,18 @@ const VALID_TERMINATION_REASONS = new Set<TrajectoryTerminationReason>([
   "error",
   "user_abort",
 ]);
-const CODEX_TRAJECTORY_DELIVERY_REGISTRY_KEY = Symbol.for(
-  "openclaw.codexTrajectoryDeliveryRegistry.v1",
-);
+const TRAJECTORY_DELIVERY_REGISTRY_KEY = Symbol.for("openclaw.trajectoryDeliveryRegistry.v1");
 const MAX_PENDING_TRAJECTORY_DELIVERIES = 128;
 const PENDING_TRAJECTORY_DELIVERY_MAX_AGE_MS = 60 * 60 * 1000;
 
-type CodexTrajectoryOpenFlagConstants = Pick<
+type CompactTrajectoryOpenFlagConstants = Pick<
   typeof nodeFs.constants,
   "O_CREAT" | "O_TRUNC" | "O_WRONLY"
 > &
   Partial<Pick<typeof nodeFs.constants, "O_NOFOLLOW">>;
 
-export function resolveCodexTrajectoryWriteFlags(
-  constants: CodexTrajectoryOpenFlagConstants = nodeFs.constants,
+export function resolveCompactTrajectoryWriteFlags(
+  constants: CompactTrajectoryOpenFlagConstants = nodeFs.constants,
 ): number {
   const noFollow = constants.O_NOFOLLOW;
   return (
@@ -142,17 +142,17 @@ export function resolveCodexTrajectoryWriteFlags(
   );
 }
 
-function resolveCodexTrajectoryDeliveryRegistry(): CodexTrajectoryDeliveryRegistry {
+function resolveTrajectoryDeliveryRegistry(): TrajectoryDeliveryRegistry {
   const globalRecord = globalThis as typeof globalThis &
-    Record<symbol, CodexTrajectoryDeliveryRegistry | undefined>;
-  globalRecord[CODEX_TRAJECTORY_DELIVERY_REGISTRY_KEY] ??= {
+    Record<symbol, TrajectoryDeliveryRegistry | undefined>;
+  globalRecord[TRAJECTORY_DELIVERY_REGISTRY_KEY] ??= {
     pendingByRunId: new Map(),
   };
-  return globalRecord[CODEX_TRAJECTORY_DELIVERY_REGISTRY_KEY];
+  return globalRecord[TRAJECTORY_DELIVERY_REGISTRY_KEY];
 }
 
-function prunePendingCodexTrajectoryDeliveries(
-  registry: CodexTrajectoryDeliveryRegistry,
+function prunePendingTrajectoryDeliveries(
+  registry: TrajectoryDeliveryRegistry,
   nowMs = Date.now(),
 ): void {
   for (const [runId, pending] of registry.pendingByRunId) {
@@ -169,7 +169,7 @@ function prunePendingCodexTrajectoryDeliveries(
   }
 }
 
-function registerPendingCodexTrajectoryDelivery(params: {
+function registerPendingTrajectoryDelivery(params: {
   runId: string;
   filePath: string;
   commit: () => Promise<void>;
@@ -178,8 +178,8 @@ function registerPendingCodexTrajectoryDelivery(params: {
   if (!runId) {
     return;
   }
-  const registry = resolveCodexTrajectoryDeliveryRegistry();
-  prunePendingCodexTrajectoryDeliveries(registry);
+  const registry = resolveTrajectoryDeliveryRegistry();
+  prunePendingTrajectoryDeliveries(registry);
   registry.pendingByRunId.set(runId, {
     filePath: params.filePath,
     registeredAtMs: Date.now(),
@@ -187,14 +187,14 @@ function registerPendingCodexTrajectoryDelivery(params: {
   });
 }
 
-export async function flushPendingCodexTrajectoryForRunId(
+export async function flushPendingTrajectoryForRunId(
   runId: string | undefined,
 ): Promise<{ flushed: boolean; filePath?: string; error?: unknown }> {
   const normalizedRunId = runId?.trim();
   if (!normalizedRunId) {
     return { flushed: false };
   }
-  const registry = resolveCodexTrajectoryDeliveryRegistry();
+  const registry = resolveTrajectoryDeliveryRegistry();
   const pending = registry.pendingByRunId.get(normalizedRunId);
   if (!pending) {
     return { flushed: false };
@@ -209,8 +209,8 @@ export async function flushPendingCodexTrajectoryForRunId(
   }
 }
 
-export function clearPendingCodexTrajectoryDeliveriesForTesting(): void {
-  resolveCodexTrajectoryDeliveryRegistry().pendingByRunId.clear();
+export function clearPendingTrajectoryDeliveriesForTesting(): void {
+  resolveTrajectoryDeliveryRegistry().pendingByRunId.clear();
 }
 
 async function assertNoSymlinkParents(filePath: string): Promise<void> {
@@ -274,7 +274,7 @@ async function safeWriteTrajectoryFile(filePath: string, content: string): Promi
     }
   }
 
-  const handle = await fs.open(filePath, resolveCodexTrajectoryWriteFlags(), 0o600);
+  const handle = await fs.open(filePath, resolveCompactTrajectoryWriteFlags(), 0o600);
   try {
     const stat = await handle.stat();
     verifyStableOpenedTrajectoryFile({ preOpenStat, postOpenStat: stat, filePath });
@@ -285,9 +285,9 @@ async function safeWriteTrajectoryFile(filePath: string, content: string): Promi
   }
 }
 
-export function createCodexTrajectoryRecorder(
-  params: CodexTrajectoryInit,
-): CodexTrajectoryRecorder | null {
+export function createCompactTrajectoryRecorder(
+  params: CompactTrajectoryInit,
+): CompactTrajectoryRecorder | null {
   const env = params.env ?? process.env;
   if (!parseTrajectoryEnabled(env)) {
     return null;
@@ -336,8 +336,8 @@ export function createCodexTrajectoryRecorder(
     const content = `${JSON.stringify(document, null, 2)}\n`;
     queue = queue
       .then(() => {
-        registerPendingCodexTrajectoryDelivery({
-          runId: params.attempt.runId,
+        registerPendingTrajectoryDelivery({
+          runId: params.attempt.runId ?? "",
           filePath,
           commit: () => safeWriteTrajectoryFile(filePath, content),
         });
@@ -393,95 +393,25 @@ export function createCodexTrajectoryRecorder(
         anonymousErrorCount: 0,
       };
     },
-    recordModelResponse: ({ result, runtimeLatencyMs, modelAndRuntimeLatencyMs, toolCalls }) => {
+    recordModelResponse: ({ usage, durationMs, actionNames, errorCount }) => {
       const turn = ensureActiveTurn();
-      if (turn.actions.length === 0) {
-        turn.actions.push(...toolCalls.map((call) => call.name).filter(Boolean));
+      const names = actionNames?.map((name) => name.trim()).filter(Boolean) ?? [];
+      if (turn.actions.length === 0 && names.length > 0) {
+        turn.actions.push(...names);
       }
-      const durationMs =
-        normalizeInteger(runtimeLatencyMs) ??
-        normalizeInteger(modelAndRuntimeLatencyMs) ??
+      turn.anonymousErrorCount += normalizeInteger(errorCount) ?? 0;
+      const resolvedDurationMs =
+        normalizeInteger(durationMs) ??
         (typeof turn.startedAtMs === "number"
           ? Math.max(0, Date.now() - turn.startedAtMs)
           : undefined);
-      turns.push(buildTurnRecord(turn, toTrajectoryTokenUsage(result.attemptUsage), durationMs));
+      turns.push(buildTurnRecord(turn, toTrajectoryTokenUsage(usage), resolvedDurationMs));
       activeTurn = undefined;
     },
     flush: async () => {
       await queue;
     },
   };
-}
-
-export function recordCodexTrajectoryModelStepStarted(
-  recorder: CodexTrajectoryRecorder | null,
-  params: {
-    stepId: string;
-    threadId: string;
-    turnId?: string;
-    provider: string;
-    model: string;
-    startedAtMs: number;
-  },
-): void {
-  recorder?.recordModelStepStarted({ startedAtMs: params.startedAtMs });
-}
-
-export function recordCodexTrajectoryModelRequest(
-  recorder: CodexTrajectoryRecorder | null,
-  params: {
-    stepId: string;
-    threadId: string;
-    turnId?: string;
-    captureLevel?: string;
-    systemPrompt?: string;
-    prompt: string;
-    historyMessages?: unknown[];
-    imagesCount: number;
-    tools?: Array<{ name?: string; description?: string; inputSchema?: unknown }>;
-  },
-): void {
-  void recorder;
-  void params;
-}
-
-export function recordCodexTrajectoryModelResponse(
-  recorder: CodexTrajectoryRecorder | null,
-  params: {
-    stepId: string;
-    threadId: string;
-    turnId: string;
-    result: EmbeddedRunAttemptResult;
-    timedOut: boolean;
-    aborted: boolean;
-    promptError: unknown;
-    runtimeLatencyMs?: number;
-    modelAndRuntimeLatencyMs?: number;
-    toolCalls: CodexTrajectoryToolCallSummary[];
-    yieldDetected?: boolean;
-  },
-): void {
-  recorder?.recordModelResponse({
-    result: params.result,
-    runtimeLatencyMs: params.runtimeLatencyMs,
-    modelAndRuntimeLatencyMs: params.modelAndRuntimeLatencyMs,
-    toolCalls: params.toolCalls,
-  });
-}
-
-export function recordCodexTrajectoryCompletion(
-  recorder: CodexTrajectoryRecorder | null,
-  params: {
-    attempt: EmbeddedRunAttemptParams;
-    result: EmbeddedRunAttemptResult;
-    threadId: string;
-    turnId: string;
-    timedOut: boolean;
-    yieldDetected?: boolean;
-  },
-): void {
-  void recorder;
-  void params;
 }
 
 function parseTrajectoryEnabled(env: NodeJS.ProcessEnv): boolean {
@@ -507,30 +437,30 @@ function resolveTrajectoryFilePath(params: {
   return resolveContainedPath(baseDir, `${safeTrajectoryFileName(params.trajectoryId)}.json`);
 }
 
-function resolveTaskId(attempt: EmbeddedRunAttemptParams, env: NodeJS.ProcessEnv): string {
+function resolveTaskId(attempt: CompactTrajectoryAttempt, env: NodeJS.ProcessEnv): string {
   return (
     readEnvString(env, "CLAWMOBILE_TRAJECTORY_TASK_ID") ??
     readEnvString(env, "OPENCLAW_TRAJECTORY_TASK_ID") ??
-    readAttemptString(attempt, "task_id") ??
-    readAttemptString(attempt, "taskId") ??
+    attempt.taskId?.trim() ??
     "unknown_task"
   );
 }
 
 function resolveInstruction(
-  attempt: EmbeddedRunAttemptParams,
+  attempt: CompactTrajectoryAttempt,
   env: NodeJS.ProcessEnv,
 ): string | undefined {
   return (
     readEnvString(env, "CLAWMOBILE_TRAJECTORY_INSTRUCTION") ??
     readEnvString(env, "OPENCLAW_TRAJECTORY_INSTRUCTION") ??
-    readAttemptString(attempt, "instruction") ??
-    readAttemptString(attempt, "prompt")
+    attempt.instruction?.trim() ??
+    attempt.prompt?.trim() ??
+    undefined
   );
 }
 
 function resolveAgent(
-  attempt: EmbeddedRunAttemptParams,
+  attempt: CompactTrajectoryAttempt,
   env: NodeJS.ProcessEnv,
 ): TrajectoryDocument["agent"] {
   const modelVersion = readEnvString(env, "CLAWMOBILE_TRAJECTORY_MODEL_VERSION");
@@ -585,11 +515,11 @@ function resolveOutcome(
 function inferTerminationReason(
   data: Record<string, unknown> | undefined,
 ): TrajectoryTerminationReason {
-  const promptError = normalizeCodexTrajectoryError(data?.promptError);
-  if (data?.aborted === true) {
+  const promptError = normalizeCompactTrajectoryError(data?.promptError);
+  if (data?.aborted === true || data?.externalAbort === true) {
     return "user_abort";
   }
-  if (data?.timedOut === true) {
+  if (data?.timedOut === true || data?.idleTimedOut === true) {
     return "max_steps";
   }
   if (promptError) {
@@ -637,9 +567,7 @@ function buildRollups(turns: TrajectoryTurn[]): TrajectoryDocument["rollups"] {
   };
 }
 
-function toTrajectoryTokenUsage(
-  usage: EmbeddedRunAttemptResult["attemptUsage"],
-): TrajectoryTokenUsage {
+function toTrajectoryTokenUsage(usage: CompactTrajectoryUsage | undefined): TrajectoryTokenUsage {
   const cached = normalizeInteger(usage?.cacheRead);
   return {
     input: normalizeInteger(usage?.input) ?? 0,
@@ -651,11 +579,6 @@ function toTrajectoryTokenUsage(
 function readEnvString(env: NodeJS.ProcessEnv, key: string): string | undefined {
   const value = env[key]?.trim();
   return value ? value : undefined;
-}
-
-function readAttemptString(attempt: EmbeddedRunAttemptParams, key: string): string | undefined {
-  const value = (attempt as unknown as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function parseBoolean(value: string | undefined): boolean | undefined {
@@ -718,7 +641,7 @@ function resolveContainedPath(baseDir: string, fileName: string): string {
   return resolvedFile;
 }
 
-export function normalizeCodexTrajectoryError(value: unknown): string | null {
+export function normalizeCompactTrajectoryError(value: unknown): string | null {
   if (!value) {
     return null;
   }

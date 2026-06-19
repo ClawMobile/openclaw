@@ -29,7 +29,7 @@ A trajectory is one JSON object written at the end of a run:
 }
 ```
 
-The schema is stored at `extensions/codex/src/app-server/trajectory.schema.json`.
+The schema is stored at `src/trajectory/trajectory.schema.json`.
 
 ## Collection Switch
 
@@ -55,8 +55,8 @@ The legacy `OPENCLAW_TRAJECTORY=0` switch is also accepted as a disablement alia
 
 ## Turn Records
 
-Each `turns[]` entry records one model inference boundary as far as the Codex
-app-server exposes it:
+Each `turns[]` entry records one PI model inference boundary exposed by the
+OpenClaw embedded runner:
 
 ```json
 {
@@ -94,7 +94,7 @@ added.
 
 `termination_reason` describes how the run stopped. `success` is intended to be
 provided by an external checker. Until a benchmark harness passes checker data,
-the Codex integration can be overridden with `CLAWMOBILE_TRAJECTORY_SUCCESS` and
+the PI integration can be overridden with `CLAWMOBILE_TRAJECTORY_SUCCESS` and
 `CLAWMOBILE_TRAJECTORY_CHECKER_OUTPUT`.
 
 Runtime fallback mapping:

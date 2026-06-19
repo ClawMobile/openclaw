@@ -22,13 +22,11 @@
       "format": "date-time",
       "description": "运行开始时间（可选，便于按时间看指标）。"
     },
-
     "task_id": {
       "type": "string",
       "description": "任务模板稳定 key。同一任务多次运行共享——按任务统计完成率的前提。"
     },
     "instruction": { "type": "string", "description": "可选：自然语言指令，方便人读日志。" },
-
     "agent": {
       "type": "object",
       "description": "被评测 agent。model 用于 token→成本换算、并避免跨模型混算。",
@@ -40,13 +38,11 @@
         "model_version": { "type": "string" }
       }
     },
-
     "turns": {
       "type": "array",
       "description": "按推理顺序的瘦记录。功能 1 用它数步数、汇总 token；rollups 即由它聚合而来。",
       "items": { "$ref": "#/$defs/turn" }
     },
-
     "outcome": {
       "type": "object",
       "description": "完成率来源。",
@@ -69,7 +65,6 @@
         }
       }
     },
-
     "rollups": {
       "type": "object",
       "description": "功能 1 的主读取面，全部可由 turns 重算。",
@@ -89,7 +84,6 @@
       }
     }
   },
-
   "$defs": {
     "turn": {
       "type": "object",

@@ -74,7 +74,6 @@ import {
 } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
-import { flushPendingCodexTrajectoryDeliveryForRun } from "./codex-trajectory-delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import {
   buildTelegramErrorScopeKey,
@@ -100,6 +99,7 @@ import {
 } from "./reasoning-lane-coordinator.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import { flushPendingTrajectoryDeliveryForRun } from "./trajectory-delivery.js";
 
 export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 
@@ -982,7 +982,7 @@ export const dispatchTelegramMessage = async ({
         if (!sourceRunId) {
           return;
         }
-        const flushResult = await flushPendingCodexTrajectoryDeliveryForRun(sourceRunId);
+        const flushResult = await flushPendingTrajectoryDeliveryForRun(sourceRunId);
         if (flushResult.error) {
           logVerbose(
             `telegram: trajectory save failed for run ${sourceRunId}: ${formatErrorMessage(

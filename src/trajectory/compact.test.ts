@@ -1,37 +1,31 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Ajv2020 from "ajv/dist/2020";
+import AjvPkg from "ajv";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  clearPendingCodexTrajectoryDeliveriesForTesting,
-  createCodexTrajectoryRecorder,
-  flushPendingCodexTrajectoryForRunId,
-  recordCodexTrajectoryModelRequest,
-  recordCodexTrajectoryModelResponse,
-  recordCodexTrajectoryModelStepStarted,
-  resolveCodexTrajectoryWriteFlags,
-} from "./trajectory.js";
+  clearPendingTrajectoryDeliveriesForTesting,
+  createCompactTrajectoryRecorder,
+  flushPendingTrajectoryForRunId,
+  resolveCompactTrajectoryWriteFlags,
+} from "./compact.js";
 
+const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-trajectory-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pi-trajectory-"));
   tempDirs.push(dir);
   return dir;
 }
 
 function makeAttempt(overrides: Record<string, unknown> = {}) {
   return {
-    sessionFile: path.join(makeTempDir(), "session.jsonl"),
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     runId: "run-1",
-    provider: "codex",
-    modelId: "gpt-5.4",
-    model: { api: "responses" },
+    modelId: "gpt-5.5",
     prompt: "hidden runtime prompt",
-    images: [],
     ...overrides,
   } as never;
 }
@@ -43,23 +37,24 @@ function readTrajectory(filePath: string): Record<string, unknown> {
 function expectSchemaValid(document: unknown): void {
   const schema = JSON.parse(
     fs.readFileSync(new URL("./trajectory.schema.json", import.meta.url), "utf8"),
-  );
-  const ajv = new Ajv2020({ strict: false });
+  ) as Record<string, unknown>;
+  delete schema.$schema;
+  const ajv = new Ajv({ strict: false });
   const validate = ajv.compile(schema);
   expect(validate(document), JSON.stringify(validate.errors, null, 2)).toBe(true);
 }
 
 afterEach(() => {
-  clearPendingCodexTrajectoryDeliveriesForTesting();
+  clearPendingTrajectoryDeliveriesForTesting();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-describe("Codex benchmark trajectory collector", () => {
+describe("PI benchmark trajectory collector", () => {
   it("keeps write flags usable when O_NOFOLLOW is unavailable", () => {
     expect(
-      resolveCodexTrajectoryWriteFlags({
+      resolveCompactTrajectoryWriteFlags({
         O_CREAT: 0x01,
         O_TRUNC: 0x02,
         O_WRONLY: 0x04,
@@ -69,9 +64,9 @@ describe("Codex benchmark trajectory collector", () => {
 
   it("is enabled by default", () => {
     const tmpDir = makeTempDir();
-    const recorder = createCodexTrajectoryRecorder({
+    const recorder = createCompactTrajectoryRecorder({
       cwd: tmpDir,
-      attempt: makeAttempt({ sessionFile: path.join(tmpDir, "session.jsonl") }),
+      attempt: makeAttempt(),
       env: {},
     });
 
@@ -80,7 +75,7 @@ describe("Codex benchmark trajectory collector", () => {
   });
 
   it("honors explicit disablement", () => {
-    const recorder = createCodexTrajectoryRecorder({
+    const recorder = createCompactTrajectoryRecorder({
       cwd: makeTempDir(),
       attempt: makeAttempt(),
       env: { CLAWMOBILE_COLLECT_TRAJECTORY: "0" },
@@ -91,9 +86,9 @@ describe("Codex benchmark trajectory collector", () => {
 
   it("writes a schema-valid v1 trajectory with turn rollups", async () => {
     const tmpDir = makeTempDir();
-    const recorder = createCodexTrajectoryRecorder({
+    const recorder = createCompactTrajectoryRecorder({
       cwd: tmpDir,
-      attempt: makeAttempt({ sessionFile: path.join(tmpDir, "session.jsonl") }),
+      attempt: makeAttempt(),
       env: {
         CLAWMOBILE_COLLECT_TRAJECTORY: "1",
         CLAWMOBILE_TRAJECTORY_DIR: tmpDir,
@@ -110,22 +105,7 @@ describe("Codex benchmark trajectory collector", () => {
     });
 
     expect(recorder).not.toBeNull();
-    recordCodexTrajectoryModelStepStarted(recorder, {
-      stepId: "step-1",
-      threadId: "thread-1",
-      provider: "codex",
-      model: "gpt-5.4",
-      startedAtMs: 100,
-    });
-    recordCodexTrajectoryModelRequest(recorder, {
-      stepId: "step-1",
-      threadId: "thread-1",
-      systemPrompt: "must not be written",
-      prompt: "must not be written",
-      historyMessages: [{ role: "user", content: "must not be written" }],
-      imagesCount: 0,
-      tools: [{ name: "tap", inputSchema: { type: "object" } }],
-    });
+    recorder?.recordModelStepStarted({ startedAtMs: 100 });
     recorder?.recordEvent("tool.call", {
       toolCallId: "call-1",
       name: "tap",
@@ -140,22 +120,9 @@ describe("Codex benchmark trajectory collector", () => {
       success: false,
       contentPreview: "must not be written",
     });
-    recordCodexTrajectoryModelResponse(recorder, {
-      stepId: "step-1",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      timedOut: false,
-      aborted: false,
-      promptError: null,
-      runtimeLatencyMs: 25,
-      toolCalls: [{ toolCallId: "call-1", name: "tap", arguments: { secret: "hidden" } }],
-      result: {
-        aborted: false,
-        promptError: null,
-        messagesSnapshot: [],
-        assistantTexts: ["must not be written"],
-        attemptUsage: { input: 10, output: 5, total: 15, cacheRead: 3 },
-      } as never,
+    recorder?.recordModelResponse({
+      durationMs: 25,
+      usage: { input: 10, output: 5, cacheRead: 3 },
     });
     recorder?.recordEvent("session.ended", {
       status: "success",
@@ -165,7 +132,7 @@ describe("Codex benchmark trajectory collector", () => {
 
     const filePath = path.join(tmpDir, "traj_test_run.json");
     expect(fs.existsSync(filePath)).toBe(false);
-    await expect(flushPendingCodexTrajectoryForRunId("run-1")).resolves.toMatchObject({
+    await expect(flushPendingTrajectoryForRunId("run-1")).resolves.toMatchObject({
       flushed: true,
       filePath,
     });
@@ -198,7 +165,7 @@ describe("Codex benchmark trajectory collector", () => {
       trajectory_id: "traj_test_run",
       task_id: "keep_create_note_titled",
       instruction: "benchmark instruction",
-      agent: { framework: "openclaw", model: "gpt-5.4" },
+      agent: { framework: "openclaw", model: "gpt-5.5" },
       turns: [
         {
           turn_index: 0,
@@ -221,14 +188,13 @@ describe("Codex benchmark trajectory collector", () => {
       },
     });
     expect(content).not.toContain("must not be written");
-    expect(content).not.toContain("hidden");
   });
 
   it("records thinking-only turns with an empty action list", async () => {
     const tmpDir = makeTempDir();
-    const recorder = createCodexTrajectoryRecorder({
+    const recorder = createCompactTrajectoryRecorder({
       cwd: tmpDir,
-      attempt: makeAttempt({ sessionFile: path.join(tmpDir, "session.jsonl") }),
+      attempt: makeAttempt(),
       env: {
         CLAWMOBILE_COLLECT_TRAJECTORY: "1",
         CLAWMOBILE_TRAJECTORY_DIR: tmpDir,
@@ -236,33 +202,14 @@ describe("Codex benchmark trajectory collector", () => {
       },
     });
 
-    recordCodexTrajectoryModelStepStarted(recorder, {
-      stepId: "step-1",
-      threadId: "thread-1",
-      provider: "codex",
-      model: "gpt-5.4",
-      startedAtMs: 100,
-    });
-    recordCodexTrajectoryModelResponse(recorder, {
-      stepId: "step-1",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      timedOut: false,
-      aborted: false,
-      promptError: null,
-      runtimeLatencyMs: 50,
-      toolCalls: [],
-      result: {
-        aborted: false,
-        promptError: null,
-        messagesSnapshot: [],
-        assistantTexts: [],
-        attemptUsage: { input: 7, output: 2, total: 9 },
-      } as never,
+    recorder?.recordModelStepStarted({ startedAtMs: 100 });
+    recorder?.recordModelResponse({
+      durationMs: 50,
+      usage: { input: 7, output: 2 },
     });
     recorder?.recordEvent("session.ended", { status: "success" });
     await recorder?.flush();
-    await expect(flushPendingCodexTrajectoryForRunId("run-1")).resolves.toMatchObject({
+    await expect(flushPendingTrajectoryForRunId("run-1")).resolves.toMatchObject({
       flushed: true,
     });
 
@@ -277,9 +224,9 @@ describe("Codex benchmark trajectory collector", () => {
 
   it("maps interrupted runs to user_abort and allows checker overrides", async () => {
     const tmpDir = makeTempDir();
-    const recorder = createCodexTrajectoryRecorder({
+    const recorder = createCompactTrajectoryRecorder({
       cwd: tmpDir,
-      attempt: makeAttempt({ sessionFile: path.join(tmpDir, "session.jsonl") }),
+      attempt: makeAttempt(),
       env: {
         CLAWMOBILE_COLLECT_TRAJECTORY: "1",
         CLAWMOBILE_TRAJECTORY_DIR: tmpDir,
@@ -290,7 +237,7 @@ describe("Codex benchmark trajectory collector", () => {
 
     recorder?.recordEvent("session.ended", { aborted: true });
     await recorder?.flush();
-    await expect(flushPendingCodexTrajectoryForRunId("run-1")).resolves.toMatchObject({
+    await expect(flushPendingTrajectoryForRunId("run-1")).resolves.toMatchObject({
       flushed: true,
     });
 
@@ -307,9 +254,9 @@ describe("Codex benchmark trajectory collector", () => {
     const linkDir = path.join(tmpDir, "link");
     fs.mkdirSync(targetDir);
     fs.symlinkSync(targetDir, linkDir);
-    const recorder = createCodexTrajectoryRecorder({
+    const recorder = createCompactTrajectoryRecorder({
       cwd: tmpDir,
-      attempt: makeAttempt({ sessionFile: path.join(tmpDir, "session.jsonl") }),
+      attempt: makeAttempt(),
       env: {
         CLAWMOBILE_COLLECT_TRAJECTORY: "1",
         CLAWMOBILE_TRAJECTORY_DIR: linkDir,

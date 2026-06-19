@@ -1,31 +1,29 @@
-type PendingCodexTrajectoryDelivery = {
+type PendingTrajectoryDelivery = {
   filePath: string;
   registeredAtMs: number;
   commit: () => Promise<void>;
 };
 
-type CodexTrajectoryDeliveryRegistry = {
-  pendingByRunId: Map<string, PendingCodexTrajectoryDelivery>;
+type TrajectoryDeliveryRegistry = {
+  pendingByRunId: Map<string, PendingTrajectoryDelivery>;
 };
 
-const CODEX_TRAJECTORY_DELIVERY_REGISTRY_KEY = Symbol.for(
-  "openclaw.codexTrajectoryDeliveryRegistry.v1",
-);
+const TRAJECTORY_DELIVERY_REGISTRY_KEY = Symbol.for("openclaw.trajectoryDeliveryRegistry.v1");
 
-function resolveCodexTrajectoryDeliveryRegistry(): CodexTrajectoryDeliveryRegistry | undefined {
+function resolveTrajectoryDeliveryRegistry(): TrajectoryDeliveryRegistry | undefined {
   const globalRecord = globalThis as typeof globalThis &
-    Record<symbol, CodexTrajectoryDeliveryRegistry | undefined>;
-  return globalRecord[CODEX_TRAJECTORY_DELIVERY_REGISTRY_KEY];
+    Record<symbol, TrajectoryDeliveryRegistry | undefined>;
+  return globalRecord[TRAJECTORY_DELIVERY_REGISTRY_KEY];
 }
 
-export async function flushPendingCodexTrajectoryDeliveryForRun(
+export async function flushPendingTrajectoryDeliveryForRun(
   runId: string | undefined,
 ): Promise<{ flushed: boolean; filePath?: string; error?: unknown }> {
   const normalizedRunId = runId?.trim();
   if (!normalizedRunId) {
     return { flushed: false };
   }
-  const registry = resolveCodexTrajectoryDeliveryRegistry();
+  const registry = resolveTrajectoryDeliveryRegistry();
   const pending = registry?.pendingByRunId.get(normalizedRunId);
   if (!registry || !pending) {
     return { flushed: false };

@@ -324,107 +324,59 @@ describe("registerTelegramNativeCommands", () => {
     );
   });
 
-  it("registers /clawmobile_trace and sends the current trace snapshot as a document", async () => {
-    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-workspace-"));
-    const traceDir = path.join(tempWorkspace, "logs");
+  it("lists and downloads trajectory files with /clawmobile_trajectory", async () => {
+    const tempWorkspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-trajectory-workspace-"),
+    );
+    const trajectoryDir = path.join(tempWorkspace, "recordings", "trajectories");
     const sendDocument = vi.fn().mockResolvedValue({ message_id: 7 });
     try {
-      await fs.mkdir(traceDir, { recursive: true });
+      await fs.mkdir(trajectoryDir, { recursive: true });
+      const newer = path.join(trajectoryDir, "traj_new.json");
+      const older = path.join(trajectoryDir, "traj_old.json");
       await fs.writeFile(
-        path.join(traceDir, "clawmobile-trace.jsonl"),
-        [
-          JSON.stringify({
-            scope: "tool",
-            phase: "start",
-            invocation_id: "inv-1",
-            tool: "android_agent_task",
-            input: { goal: "Open Settings and enable Wi-Fi" },
-          }),
-          JSON.stringify({
-            scope: "tool",
-            phase: "end",
-            invocation_id: "inv-1",
-            tool: "android_agent_task",
-            ok: true,
-          }),
-        ].join("\n") + "\n",
-        "utf-8",
-      );
-      vi.stubEnv("OPENCLAW_WORKSPACE", tempWorkspace);
-
-      const botHarness = createCommandBot({
-        api: { sendDocument },
-      });
-      registerTelegramNativeCommands({
-        ...createNativeCommandTestParams(
-          {},
-          { bot: botHarness.bot, allowFrom: ["200"], telegramCfg: { allowFrom: ["200"] } },
-        ),
-      });
-
-      const handler = botHarness.commandHandlers.get("clawmobile_trace");
-      expect(handler).toBeTruthy();
-      await handler?.(createPrivateCommandContext());
-
-      expect(sendDocument).toHaveBeenCalledTimes(1);
-      expect(sendDocument.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({
-          caption: expect.stringContaining("open-settings-and-enable-wi-fi"),
+        newer,
+        JSON.stringify({
+          schema_version: "2.1.0",
+          trajectory_id: "traj_new",
+          started_at: "2026-06-20T10:00:00.000Z",
+          task_id: "new_task",
+          agent: { model: "gpt-5.5" },
+          messages: {},
+          observations: {},
+          turns: [],
+          outcome: { success: true, termination_reason: "success" },
+          rollups: { total_turns: 2, total_actions: 3, total_tokens: { input: 1, output: 2 } },
         }),
-      );
-    } finally {
-      vi.unstubAllEnvs();
-      await fs.rm(tempWorkspace, { recursive: true, force: true });
-    }
-  });
-
-  it("sends an indexed trace snapshot for /clawmobile_trace <number>", async () => {
-    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-workspace-"));
-    const traceDir = path.join(tempWorkspace, "logs");
-    const sendDocument = vi.fn().mockResolvedValue({ message_id: 7 });
-    try {
-      await fs.mkdir(traceDir, { recursive: true });
-      const newest = path.join(
-        traceDir,
-        "clawmobile-trace-android_type-2000-android_type_2000_2.jsonl",
-      );
-      const older = path.join(
-        traceDir,
-        "clawmobile-trace-android_tap-1000-android_tap_1000_1.jsonl",
-      );
-      await fs.writeFile(
-        newest,
-        JSON.stringify({
-          timestamp: "2026-01-02T00:00:00.000Z",
-          backend: "adb",
-          tool: "android_type",
-          action: "android_type",
-          action_parameters: { text: "newer" },
-        }) + "\n",
         "utf-8",
       );
       await fs.writeFile(
         older,
         JSON.stringify({
-          timestamp: "2026-01-01T00:00:00.000Z",
-          backend: "adb",
-          tool: "android_tap",
-          action: "android_tap",
-          action_parameters: { x: 10, y: 20 },
-        }) + "\n",
+          schema_version: "2.1.0",
+          trajectory_id: "traj_old",
+          started_at: "2026-06-19T10:00:00.000Z",
+          task_id: "old_task",
+          agent: { model: "gpt-5.5" },
+          messages: {},
+          observations: {},
+          turns: [],
+          outcome: { success: false, termination_reason: "error" },
+          rollups: { total_turns: 1, total_actions: 1, total_tokens: { input: 1, output: 1 } },
+        }),
         "utf-8",
       );
       await fs.utimes(
-        newest,
-        new Date("2026-01-02T00:00:00.000Z"),
-        new Date("2026-01-02T00:00:00.000Z"),
+        newer,
+        new Date("2026-06-20T10:00:00.000Z"),
+        new Date("2026-06-20T10:00:00.000Z"),
       );
       await fs.utimes(
         older,
-        new Date("2026-01-01T00:00:00.000Z"),
-        new Date("2026-01-01T00:00:00.000Z"),
+        new Date("2026-06-19T10:00:00.000Z"),
+        new Date("2026-06-19T10:00:00.000Z"),
       );
-      vi.stubEnv("OPENCLAW_WORKSPACE", tempWorkspace);
+      vi.stubEnv("CLAWMOBILE_TRAJECTORY_DIR", trajectoryDir);
 
       const botHarness = createCommandBot({
         api: { sendDocument },
@@ -436,109 +388,32 @@ describe("registerTelegramNativeCommands", () => {
         ),
       });
 
-      const handler = botHarness.commandHandlers.get("clawmobile_trace");
+      const handler = botHarness.commandHandlers.get("clawmobile_trajectory");
       expect(handler).toBeTruthy();
-      await handler?.(createPrivateCommandContext({ match: "2" }));
-
-      expect(sendDocument).toHaveBeenCalledTimes(1);
-      expect(sendDocument.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({ caption: "ClawMobile trace: trace-2" }),
-      );
-      const snapshots = (await fs.readdir(traceDir)).filter((name) =>
-        name.startsWith("clawmobile-trace-trace-2-"),
-      );
-      expect(snapshots).toHaveLength(1);
-      await expect(
-        fs.readFile(path.join(traceDir, snapshots[0] ?? ""), "utf-8"),
-      ).resolves.toContain('"x":10');
-    } finally {
-      vi.unstubAllEnvs();
-      await fs.rm(tempWorkspace, { recursive: true, force: true });
-    }
-  });
-
-  it("handles /clawmobile_trace_list and /clawmobile_trace_clear with direct Telegram handlers", async () => {
-    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-workspace-"));
-    const traceDir = path.join(tempWorkspace, "logs");
-    try {
-      await fs.mkdir(traceDir, { recursive: true });
-      const runTrace = path.join(
-        traceDir,
-        "clawmobile-trace-android_tap-1000-android_tap_1000_1.jsonl",
-      );
-      const snapshotTrace = path.join(traceDir, "clawmobile-trace-old-snapshot-1.jsonl");
-      await fs.writeFile(
-        runTrace,
-        JSON.stringify({
-          timestamp: "2026-01-01T00:00:00.000Z",
-          backend: "adb",
-          tool: "android_tap",
-          action: "android_tap",
-          action_parameters: { x: 10, y: 20 },
-        }) + "\n",
-        "utf-8",
-      );
-      await fs.writeFile(snapshotTrace, "{}\n", "utf-8");
-      vi.stubEnv("OPENCLAW_WORKSPACE", tempWorkspace);
-
-      const botHarness = createCommandBot({
-        api: { sendDocument: vi.fn().mockResolvedValue({ message_id: 7 }) },
-      });
-      registerTelegramNativeCommands({
-        ...createNativeCommandTestParams(
-          {},
-          { bot: botHarness.bot, allowFrom: ["200"], telegramCfg: { allowFrom: ["200"] } },
-        ),
-      });
-
-      const traceListHandler = botHarness.commandHandlers.get("clawmobile_trace_list");
-      expect(traceListHandler).toBeTruthy();
-      await traceListHandler?.(createPrivateCommandContext({ chatId: 123 }));
+      await handler?.(createPrivateCommandContext({ chatId: 123, match: "list" }));
       expect(botHarness.sendMessage).toHaveBeenCalledWith(
         123,
-        expect.stringContaining("1. 2026-01-01T00:00:00.000Z android_tap/adb 1 actions"),
+        expect.stringContaining("1. 2026-06-20T10:00:00.000Z new_task success=true"),
+        expect.any(Object),
+      );
+      expect(botHarness.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("2. 2026-06-19T10:00:00.000Z old_task success=false"),
         expect.any(Object),
       );
 
-      const traceClearHandler = botHarness.commandHandlers.get("clawmobile_trace_clear");
-      expect(traceClearHandler).toBeTruthy();
-      await traceClearHandler?.(createPrivateCommandContext({ chatId: 123 }));
-      expect(botHarness.sendMessage).toHaveBeenLastCalledWith(
-        123,
-        expect.stringContaining("Deleted 2 trace file(s)"),
-        expect.any(Object),
+      await handler?.(createPrivateCommandContext({ chatId: 123, match: "download 1,2" }));
+      expect(sendDocument).toHaveBeenCalledTimes(2);
+      expect(sendDocument.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ caption: "ClawMobile trajectory 1: new_task" }),
+      );
+      expect(sendDocument.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({ caption: "ClawMobile trajectory 2: old_task" }),
       );
     } finally {
       vi.unstubAllEnvs();
       await fs.rm(tempWorkspace, { recursive: true, force: true });
     }
-  });
-
-  it("rejects /clawmobile_trace when extra arguments are provided", async () => {
-    const sendDocument = vi.fn().mockResolvedValue({ message_id: 7 });
-    const botHarness = createCommandBot({
-      api: { sendDocument },
-    });
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(
-        {},
-        { bot: botHarness.bot, allowFrom: ["200"], telegramCfg: { allowFrom: ["200"] } },
-      ),
-    });
-
-    const handler = botHarness.commandHandlers.get("clawmobile_trace");
-    expect(handler).toBeTruthy();
-    await handler?.({
-      ...createPrivateCommandContext(),
-      match: "extra words",
-    });
-
-    expect(sendDocument).not.toHaveBeenCalled();
-    expect(botHarness.sendMessage).toHaveBeenCalledWith(
-      100,
-      "Use /clawmobile_trace or /clawmobile_trace <number>.",
-      expect.any(Object),
-    );
   });
 
   it("uses nested streaming.block.enabled for native command block-streaming behavior", () => {

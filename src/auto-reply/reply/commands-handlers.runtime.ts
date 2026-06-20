@@ -11,7 +11,6 @@ import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
 import { handleDockCommand } from "./commands-dock.js";
 import {
   handleCommandsListCommand,
-  handleExportTrajectoryCommand,
   handleExportSessionCommand,
   handleHelpCommand,
   handleStatusCommand,
@@ -62,7 +61,6 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleApproveCommand,
     handleContextCommand,
     handleExportSessionCommand,
-    handleExportTrajectoryCommand,
     handleWhoamiCommand,
     handleCrestodianCommand,
     handleSubagentsCommand,

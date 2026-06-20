@@ -2056,8 +2056,8 @@ describe("buildHelpMessage", () => {
     expect(buildHelpMessage()).toContain("/fast status|on|off");
   });
 
-  it("includes raw trace mode in help output", () => {
-    expect(buildHelpMessage()).toContain("/trace on|off|raw");
+  it("does not include trace mode in help output", () => {
+    expect(buildHelpMessage()).not.toContain("/trace");
   });
 });
 

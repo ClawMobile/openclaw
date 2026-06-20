@@ -39,16 +39,16 @@ describe("directive parsing", () => {
     expect(res.verboseLevel).toBe("on");
   });
 
-  it("matches trace with leading space", () => {
+  it("does not match trace directive", () => {
     const res = extractTraceDirective(" please /trace on now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.traceLevel).toBe("on");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("please /trace on now");
   });
 
-  it("matches raw trace directive", () => {
+  it("does not match raw trace directive", () => {
     const res = extractTraceDirective(" please /trace raw now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.traceLevel).toBe("raw");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("please /trace raw now");
   });
 
   it("matches reasoning directive", () => {

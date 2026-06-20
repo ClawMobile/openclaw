@@ -3,15 +3,12 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleContextCommand } from "./commands-context-command.js";
-import { handleExportTrajectoryCommand, handleStatusCommand } from "./commands-info.js";
+import { handleStatusCommand } from "./commands-info.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
 const buildContextReplyMock = vi.hoisted(() => vi.fn());
-const buildExportTrajectoryCommandReplyMock = vi.hoisted(() =>
-  vi.fn(async () => ({ text: "exported" })),
-);
 const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
 const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
   vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
@@ -19,10 +16,6 @@ const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
 
 vi.mock("./commands-context-report.js", () => ({
   buildContextReply: buildContextReplyMock,
-}));
-
-vi.mock("./commands-export-trajectory.js", () => ({
-  buildExportTrajectoryCommandReply: buildExportTrajectoryCommandReplyMock,
 }));
 
 vi.mock("./commands-status.js", () => ({
@@ -94,7 +87,6 @@ function buildInfoParams(
 describe("info command handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    buildExportTrajectoryCommandReplyMock.mockResolvedValue({ text: "exported" });
     buildContextReplyMock.mockImplementation(async (params: HandleCommandsParams) => {
       const normalized = params.command.commandBodyNormalized;
       if (normalized === "/context list") {
@@ -110,18 +102,6 @@ describe("info command handlers", () => {
       currentPage: 1,
       totalPages: 1,
     });
-  });
-
-  it("only lets owners export trajectory bundles", async () => {
-    const params = buildInfoParams("/export-trajectory", {
-      commands: { text: true },
-    } as OpenClawConfig);
-    params.command.senderIsOwner = false;
-
-    const result = await handleExportTrajectoryCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: false });
-    expect(buildExportTrajectoryCommandReplyMock).not.toHaveBeenCalled();
   });
 
   it("returns sender details for /whoami", async () => {

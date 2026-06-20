@@ -134,12 +134,9 @@ export function extractTraceDirective(body?: string): {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  const extracted = extractLevelDirective(body, ["trace"], normalizeTraceLevel);
   return {
-    cleaned: extracted.cleaned,
-    traceLevel: extracted.level,
-    rawLevel: extracted.rawLevel,
-    hasDirective: extracted.hasDirective,
+    cleaned: body.trim(),
+    hasDirective: false,
   };
 }
 

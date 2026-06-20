@@ -12,7 +12,7 @@ import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
+import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../thinking.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
@@ -133,7 +133,6 @@ export async function persistInlineDirectives(params: {
     params.thinkingCatalog && params.thinkingCatalog.length > 0
       ? params.thinkingCatalog
       : undefined;
-  const delegatedTraceAllowed = (params.gatewayClientScopes ?? []).includes("operator.admin");
   const activeAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
@@ -164,14 +163,6 @@ export async function persistInlineDirectives(params: {
       allowInternalVerbosePersistence
     ) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
-      updated = true;
-    }
-    if (
-      directives.hasTraceDirective &&
-      directives.traceLevel &&
-      (params.senderIsOwner || delegatedTraceAllowed)
-    ) {
-      applyTraceOverride(sessionEntry, directives.traceLevel);
       updated = true;
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {

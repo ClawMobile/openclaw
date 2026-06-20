@@ -61,14 +61,16 @@ function parseInlineDirectivesForTest(body: string) {
       execSecurity: undefined,
     };
   }
-  if (normalized === "/trace on") {
+  if (normalized === "/verbose full") {
     return {
       cleaned: "",
       hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: true,
-      traceLevel: "on",
-      rawTraceLevel: "on",
+      hasVerboseDirective: true,
+      verboseLevel: "full",
+      rawVerboseLevel: "full",
+      hasTraceDirective: false,
+      traceLevel: undefined,
+      rawTraceLevel: undefined,
       hasFastDirective: false,
       hasReasoningDirective: false,
       hasElevatedDirective: false,
@@ -78,7 +80,6 @@ function parseInlineDirectivesForTest(body: string) {
       hasStatusDirective: false,
       queueReset: false,
       thinkLevel: undefined,
-      verboseLevel: undefined,
       fastMode: undefined,
       reasoningLevel: undefined,
       elevatedLevel: undefined,
@@ -390,18 +391,18 @@ describe("resolveReplyDirectives", () => {
     });
   });
 
-  it("returns a directive-only ack for trace commands instead of continuing into the agent path", async () => {
+  it("returns a directive-only ack for verbose commands instead of continuing into the agent path", async () => {
     mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
       kind: "reply",
       reply: {
-        text: "⚙️ Trace enabled. Warning: trace output may contain sensitive information.",
+        text: "⚙️ Verbose logging set to full.",
       },
     });
 
     const result = await resolveReplyDirectives({
       ctx: buildTestCtx({
-        Body: "/trace on",
-        CommandBody: "/trace on",
+        Body: "/verbose full",
+        CommandBody: "/verbose full",
         CommandAuthorized: true,
       }),
       cfg: {},
@@ -410,10 +411,10 @@ describe("resolveReplyDirectives", () => {
       workspaceDir: "/tmp",
       agentCfg: {},
       sessionCtx: {
-        Body: "/trace on",
-        BodyStripped: "/trace on",
-        BodyForAgent: "/trace on",
-        CommandBody: "/trace on",
+        Body: "/verbose full",
+        BodyStripped: "/verbose full",
+        BodyForAgent: "/verbose full",
+        CommandBody: "/verbose full",
         Provider: "telegram",
         Surface: "telegram",
       } as TemplateContext,
@@ -426,7 +427,7 @@ describe("resolveReplyDirectives", () => {
       sessionScope: "per-sender",
       groupResolution: undefined,
       isGroup: false,
-      triggerBodyNormalized: "/trace on",
+      triggerBodyNormalized: "/verbose full",
       resetTriggered: false,
       commandAuthorized: true,
       defaultProvider: "openai",
@@ -443,7 +444,7 @@ describe("resolveReplyDirectives", () => {
     expect(result).toEqual({
       kind: "reply",
       reply: {
-        text: "⚙️ Trace enabled. Warning: trace output may contain sensitive information.",
+        text: "⚙️ Verbose logging set to full.",
       },
     });
   });

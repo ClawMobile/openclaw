@@ -765,9 +765,9 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "action",
-          description: "list or download",
+          description: "list, download, or delete",
           type: "string",
-          choices: ["list", "download"],
+          choices: ["list", "download", "delete"],
         },
         {
           name: "indices",

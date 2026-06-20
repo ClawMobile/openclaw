@@ -410,6 +410,20 @@ describe("registerTelegramNativeCommands", () => {
       expect(sendDocument.mock.calls[1]?.[2]).toEqual(
         expect.objectContaining({ caption: "ClawMobile trajectory 2: old_task" }),
       );
+
+      await handler?.(createPrivateCommandContext({ chatId: 123, match: "delete 2,99" }));
+      await expect(fs.access(older)).rejects.toThrow();
+      await expect(fs.access(newer)).resolves.toBeUndefined();
+      expect(botHarness.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("Deleted 1 trajectory file(s)"),
+        expect.any(Object),
+      );
+      expect(botHarness.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("Trajectory index not found: 99"),
+        expect.any(Object),
+      );
     } finally {
       vi.unstubAllEnvs();
       await fs.rm(tempWorkspace, { recursive: true, force: true });

@@ -166,6 +166,8 @@ type ClawMobileTrajectoryListEntry = ClawMobileTrajectorySummary & {
 };
 
 const CLAWMOBILE_TRAJECTORY_COMMAND = "clawmobile_trajectory";
+const CLAWMOBILE_TRAJECTORY_USAGE =
+  "Use /clawmobile_trajectory list, /clawmobile_trajectory download 1,2,3, or /clawmobile_trajectory delete 1,2,3.";
 const CLAWMOBILE_DIRECT_NATIVE_COMMANDS = new Set([CLAWMOBILE_TRAJECTORY_COMMAND]);
 
 let telegramNativeCommandDeliveryRuntimePromise:
@@ -399,6 +401,55 @@ async function selectClawMobileTrajectoriesForTelegram(indexes: number[]) {
           entries,
         )}`
       : undefined,
+  };
+}
+
+function formatDeleteError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function deleteClawMobileTrajectoriesForTelegram(indexes: number[]) {
+  const selected = await selectClawMobileTrajectoriesForTelegram(indexes);
+  if (!selected.ok) {
+    return {
+      ok: false as const,
+      deleted: 0,
+      bytes: 0,
+      text: selected.text ?? "No matching ClawMobile trajectory files found.",
+    };
+  }
+
+  let deleted = 0;
+  let bytes = 0;
+  const deletedLabels: string[] = [];
+  const errors: string[] = [];
+  for (const trajectory of selected.selected) {
+    try {
+      await fs.unlink(trajectory.path);
+      deleted += 1;
+      bytes += trajectory.bytes;
+      deletedLabels.push(`${trajectory.index}:${trajectory.filename}`);
+    } catch (error) {
+      errors.push(`${trajectory.index}:${trajectory.filename} (${formatDeleteError(error)})`);
+    }
+  }
+
+  const lines = [`Deleted ${deleted} trajectory file(s), freed ${formatFileBytes(bytes)}.`];
+  if (deletedLabels.length > 0) {
+    lines.push(`Deleted: ${deletedLabels.join(", ")}`);
+  }
+  if (selected.missing.length > 0) {
+    lines.push(`Trajectory index not found: ${selected.missing.join(", ")}`);
+  }
+  if (errors.length > 0) {
+    lines.push(`Failed to delete: ${errors.join(", ")}`);
+  }
+
+  return {
+    ok: errors.length === 0,
+    deleted,
+    bytes,
+    text: lines.join("\n"),
   };
 }
 
@@ -1214,7 +1265,7 @@ export const registerTelegramNativeCommands = ({
           await sendTrajectoryCommandText(
             resolved.auth,
             resolved.threadParams,
-            "Use /clawmobile_trajectory list or /clawmobile_trajectory download 1,2,3.",
+            CLAWMOBILE_TRAJECTORY_USAGE,
           );
           return;
         }
@@ -1252,10 +1303,26 @@ export const registerTelegramNativeCommands = ({
         return;
       }
 
+      if (action === "delete") {
+        const indexes = parseClawMobileTrajectoryIndexes(rest.join(" "));
+        if (!indexes) {
+          await sendTrajectoryCommandText(
+            resolved.auth,
+            resolved.threadParams,
+            CLAWMOBILE_TRAJECTORY_USAGE,
+          );
+          return;
+        }
+
+        const deleted = await deleteClawMobileTrajectoriesForTelegram(indexes);
+        await sendTrajectoryCommandText(resolved.auth, resolved.threadParams, deleted.text);
+        return;
+      }
+
       await sendTrajectoryCommandText(
         resolved.auth,
         resolved.threadParams,
-        "Use /clawmobile_trajectory list or /clawmobile_trajectory download 1,2,3.",
+        CLAWMOBILE_TRAJECTORY_USAGE,
       );
     });
   };

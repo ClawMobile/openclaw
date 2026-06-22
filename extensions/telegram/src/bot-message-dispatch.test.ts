@@ -448,6 +448,22 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("sends a separate model turn completion message after final answer delivery", async () => {
+    const draftStream = createDraftStream(1001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    const bot = createBot();
+
+    await dispatchWithContext({ context: createContext(), bot });
+
+    expect(bot.api.sendMessage).toHaveBeenCalledWith(123, "model turn completed", {
+      message_thread_id: 777,
+    });
+  });
+
   it("skips answer draft preview for same-chat selected quotes", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });

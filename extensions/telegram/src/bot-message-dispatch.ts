@@ -65,7 +65,11 @@ import {
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
-import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  getTelegramTextParts,
+  resolveTelegramReplyId,
+} from "./bot/helpers.js";
 import {
   addTelegramNativeQuoteCandidate,
   buildTelegramNativeQuoteCandidate,
@@ -102,6 +106,7 @@ import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const MODEL_TURN_COMPLETED_TEXT = "model turn completed";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 const replyRouteLogger = createSubsystemLogger("telegram/reply-route");
 
@@ -929,6 +934,22 @@ export const dispatchTelegramMessage = async ({
         groupId: deliveryBaseOptions.mirrorGroupId,
       });
     };
+    let modelTurnCompletedNoticeSent = false;
+    const sendModelTurnCompletedNotice = async () => {
+      if (modelTurnCompletedNoticeSent || isDispatchSuperseded()) {
+        return;
+      }
+      modelTurnCompletedNoticeSent = true;
+      try {
+        await bot.api.sendMessage(
+          chatId,
+          MODEL_TURN_COMPLETED_TEXT,
+          buildTelegramThreadParams(threadSpec),
+        );
+      } catch (err) {
+        logVerbose(`telegram model turn completion notice failed: ${formatErrorMessage(err)}`);
+      }
+    };
     const deliverLaneText = createLaneTextDeliverer({
       lanes,
       archivedAnswerPreviews,
@@ -975,6 +996,7 @@ export const dispatchTelegramMessage = async ({
       },
       sourceRunStartedAtMs: turnStartedAtMs,
       getLastVisibleNonPreviewDeliveryAtMs: () => lastVisibleNonPreviewDeliveryAtMs,
+      onFinalAnswerDelivered: sendModelTurnCompletedNotice,
     });
 
     if (isDmTopic) {

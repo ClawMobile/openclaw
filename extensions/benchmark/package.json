@@ -1,0 +1,46 @@
+{
+  "name": "@openclaw/benchmark-channel",
+  "version": "2026.5.7",
+  "private": true,
+  "description": "OpenClaw benchmark channel plugin",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./api.js": "./api.ts",
+    "./runtime-api.js": "./runtime-api.ts"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.7"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "benchmark",
+      "label": "Benchmark",
+      "selectionLabel": "Benchmark",
+      "detailLabel": "Benchmark",
+      "docsPath": "/channels/benchmark",
+      "docsLabel": "benchmark",
+      "blurb": "Local HTTP channel for deterministic benchmark harnesses.",
+      "systemImage": "flask-conical",
+      "order": 998,
+      "exposure": {
+        "configured": false,
+        "setup": false,
+        "docs": false
+      }
+    }
+  }
+}

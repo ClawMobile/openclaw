@@ -3,6 +3,11 @@
       - any-glob-to-any-file:
           - "extensions/bluebubbles/**"
           - "docs/channels/bluebubbles.md"
+"channel: benchmark":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/benchmark/**"
+          - "docs/channels/benchmark.md"
 "plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:

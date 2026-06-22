@@ -1,0 +1,12 @@
+{
+  "id": "benchmark",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["benchmark"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

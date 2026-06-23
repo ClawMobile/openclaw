@@ -37,8 +37,8 @@
       "systemImage": "flask-conical",
       "order": 998,
       "exposure": {
-        "configured": false,
-        "setup": false,
+        "configured": true,
+        "setup": true,
         "docs": false
       }
     }

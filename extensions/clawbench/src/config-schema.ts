@@ -1,7 +1,7 @@
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 
-const BenchmarkChannelAccountConfigSchema = z
+const ClawBenchChannelAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -13,11 +13,11 @@ const BenchmarkChannelAccountConfigSchema = z
   })
   .strict();
 
-const BenchmarkChannelConfigSchema = BenchmarkChannelAccountConfigSchema.extend({
-  accounts: z.record(z.string(), BenchmarkChannelAccountConfigSchema.partial()).optional(),
+const ClawBenchChannelConfigSchema = ClawBenchChannelAccountConfigSchema.extend({
+  accounts: z.record(z.string(), ClawBenchChannelAccountConfigSchema.partial()).optional(),
   defaultAccount: z.string().optional(),
 }).strict();
 
-export const benchmarkChannelPluginConfigSchema = buildChannelConfigSchema(
-  BenchmarkChannelConfigSchema,
+export const clawBenchChannelPluginConfigSchema = buildChannelConfigSchema(
+  ClawBenchChannelConfigSchema,
 );

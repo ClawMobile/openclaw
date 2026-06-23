@@ -4,10 +4,10 @@ export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
   plugin: {
     specifier: "./setup-plugin-api.js",
-    exportName: "benchmarkChannelSetupPlugin",
+    exportName: "clawBenchChannelSetupPlugin",
   },
   runtime: {
     specifier: "./api.js",
-    exportName: "setBenchmarkChannelRuntime",
+    exportName: "setClawBenchChannelRuntime",
   },
 });

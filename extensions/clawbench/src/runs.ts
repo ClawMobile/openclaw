@@ -1,11 +1,11 @@
-export type BenchmarkRunStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+export type ClawBenchRunStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
 
-export type BenchmarkRunRecord = {
+export type ClawBenchRunRecord = {
   accountId: string;
   runId: string;
   instruction: string;
   deviceSerial?: string;
-  status: BenchmarkRunStatus;
+  status: ClawBenchRunStatus;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
@@ -13,9 +13,9 @@ export type BenchmarkRunRecord = {
   error?: string;
 };
 
-const runsByAccount = new Map<string, Map<string, BenchmarkRunRecord>>();
+const runsByAccount = new Map<string, Map<string, ClawBenchRunRecord>>();
 
-function accountRuns(accountId: string): Map<string, BenchmarkRunRecord> {
+function accountRuns(accountId: string): Map<string, ClawBenchRunRecord> {
   let runs = runsByAccount.get(accountId);
   if (!runs) {
     runs = new Map();
@@ -24,19 +24,19 @@ function accountRuns(accountId: string): Map<string, BenchmarkRunRecord> {
   return runs;
 }
 
-export function createBenchmarkRun(params: {
+export function createClawBenchRun(params: {
   accountId: string;
   runId: string;
   instruction: string;
   deviceSerial?: string;
-}): BenchmarkRunRecord {
+}): ClawBenchRunRecord {
   const runs = accountRuns(params.accountId);
   const existing = runs.get(params.runId);
   if (existing && existing.status !== "COMPLETED" && existing.status !== "FAILED") {
-    throw new Error(`benchmark run already active: ${params.runId}`);
+    throw new Error(`clawbench run already active: ${params.runId}`);
   }
   const now = Date.now();
-  const record: BenchmarkRunRecord = {
+  const record: ClawBenchRunRecord = {
     accountId: params.accountId,
     runId: params.runId,
     instruction: params.instruction,
@@ -49,10 +49,10 @@ export function createBenchmarkRun(params: {
   return { ...record };
 }
 
-export function markBenchmarkRunRunning(params: {
+export function markClawBenchRunRunning(params: {
   accountId: string;
   runId: string;
-}): BenchmarkRunRecord | null {
+}): ClawBenchRunRecord | null {
   const record = accountRuns(params.accountId).get(params.runId);
   if (!record) {
     return null;
@@ -62,11 +62,11 @@ export function markBenchmarkRunRunning(params: {
   return { ...record };
 }
 
-export function completeBenchmarkRun(params: {
+export function completeClawBenchRun(params: {
   accountId: string;
   runId: string;
   replyText?: string;
-}): BenchmarkRunRecord | null {
+}): ClawBenchRunRecord | null {
   const record = accountRuns(params.accountId).get(params.runId);
   if (!record) {
     return null;
@@ -80,11 +80,11 @@ export function completeBenchmarkRun(params: {
   return { ...record };
 }
 
-export function failBenchmarkRun(params: {
+export function failClawBenchRun(params: {
   accountId: string;
   runId: string;
   error: string;
-}): BenchmarkRunRecord | null {
+}): ClawBenchRunRecord | null {
   const record = accountRuns(params.accountId).get(params.runId);
   if (!record) {
     return null;
@@ -97,10 +97,10 @@ export function failBenchmarkRun(params: {
   return { ...record };
 }
 
-export function getBenchmarkRunSnapshot(params: {
+export function getClawBenchRunSnapshot(params: {
   accountId?: string | null;
   runId: string;
-}): BenchmarkRunRecord | null {
+}): ClawBenchRunRecord | null {
   const accountId = params.accountId ?? "default";
   const record = accountRuns(accountId).get(params.runId);
   return record ? { ...record } : null;

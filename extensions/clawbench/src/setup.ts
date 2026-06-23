@@ -2,13 +2,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
-export function applyBenchmarkSetup(params: {
+export function applyClawBenchSetup(params: {
   cfg: OpenClawConfig;
   accountId: string;
   input: Record<string, unknown>;
 }): OpenClawConfig {
   const nextCfg = structuredClone(params.cfg) as CoreConfig;
-  const section = nextCfg.channels?.benchmark ?? {};
+  const section = nextCfg.channels?.clawbench ?? {};
   const accounts = { ...section.accounts };
   const target =
     params.accountId === DEFAULT_ACCOUNT_ID ? { ...section } : { ...accounts[params.accountId] };
@@ -29,13 +29,13 @@ export function applyBenchmarkSetup(params: {
 
   nextCfg.channels ??= {};
   if (params.accountId === DEFAULT_ACCOUNT_ID) {
-    nextCfg.channels.benchmark = {
+    nextCfg.channels.clawbench = {
       ...section,
       ...target,
     };
   } else {
     accounts[params.accountId] = target;
-    nextCfg.channels.benchmark = {
+    nextCfg.channels.clawbench = {
       ...section,
       accounts,
     };

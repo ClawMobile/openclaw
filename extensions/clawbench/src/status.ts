@@ -3,10 +3,10 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
-import type { ResolvedBenchmarkChannelAccount } from "./types.js";
+import type { ResolvedClawBenchChannelAccount } from "./types.js";
 
-export const benchmarkChannelStatus =
-  createComputedAccountStatusAdapter<ResolvedBenchmarkChannelAccount>({
+export const clawBenchChannelStatus =
+  createComputedAccountStatusAdapter<ResolvedClawBenchChannelAccount>({
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
     buildChannelSummary: ({ snapshot }) => ({
       baseUrl: snapshot.baseUrl ?? "[not running]",

@@ -1,4 +1,4 @@
-export type BenchmarkChannelAccountConfig = {
+export type ClawBenchChannelAccountConfig = {
   name?: string;
   enabled?: boolean;
   host?: string;
@@ -8,21 +8,21 @@ export type BenchmarkChannelAccountConfig = {
   defaultTo?: string;
 };
 
-type BenchmarkChannelConfig = BenchmarkChannelAccountConfig & {
-  accounts?: Record<string, Partial<BenchmarkChannelAccountConfig>>;
+type ClawBenchChannelConfig = ClawBenchChannelAccountConfig & {
+  accounts?: Record<string, Partial<ClawBenchChannelAccountConfig>>;
   defaultAccount?: string;
 };
 
 export type CoreConfig = {
   channels?: {
-    benchmark?: BenchmarkChannelConfig;
+    clawbench?: ClawBenchChannelConfig;
   };
   session?: {
     store?: string;
   };
 };
 
-export type ResolvedBenchmarkChannelAccount = {
+export type ResolvedClawBenchChannelAccount = {
   accountId: string;
   enabled: boolean;
   configured: boolean;
@@ -31,5 +31,5 @@ export type ResolvedBenchmarkChannelAccount = {
   port: number;
   token?: string;
   baseUrl: string;
-  config: BenchmarkChannelAccountConfig;
+  config: ClawBenchChannelAccountConfig;
 };

@@ -1,20 +1,20 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { handleBenchmarkInbound } from "./inbound.js";
+import { handleClawBenchInbound } from "./inbound.js";
 import {
-  completeBenchmarkRun,
-  createBenchmarkRun,
-  failBenchmarkRun,
-  getBenchmarkRunSnapshot,
-  markBenchmarkRunRunning,
+  completeClawBenchRun,
+  createClawBenchRun,
+  failClawBenchRun,
+  getClawBenchRunSnapshot,
+  markClawBenchRunRunning,
 } from "./runs.js";
-import type { CoreConfig, ResolvedBenchmarkChannelAccount } from "./types.js";
+import type { CoreConfig, ResolvedClawBenchChannelAccount } from "./types.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-type StartBenchmarkHttpServerParams = {
+type StartClawBenchHttpServerParams = {
   channelId: string;
   channelLabel: string;
-  account: ResolvedBenchmarkChannelAccount;
+  account: ResolvedClawBenchChannelAccount;
   config: CoreConfig;
   signal: AbortSignal;
   log?: {
@@ -41,7 +41,7 @@ function isAuthorized(req: IncomingMessage, token?: string): boolean {
   if (authorization === `Bearer ${token}`) {
     return true;
   }
-  return req.headers["x-openclaw-benchmark-token"] === token;
+  return req.headers["x-openclaw-clawbench-token"] === token;
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -64,10 +64,10 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 }
 
 function routePath(req: IncomingMessage): URL {
-  return new URL(req.url ?? "/", "http://benchmark.local");
+  return new URL(req.url ?? "/", "http://clawbench.local");
 }
 
-async function handlePostRun(params: StartBenchmarkHttpServerParams, req: IncomingMessage) {
+async function handlePostRun(params: StartClawBenchHttpServerParams, req: IncomingMessage) {
   const body = await readJsonBody(req);
   const runId = typeof body.run_id === "string" ? body.run_id.trim() : "";
   const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
@@ -78,15 +78,15 @@ async function handlePostRun(params: StartBenchmarkHttpServerParams, req: Incomi
   if (!runId || !instruction) {
     return { statusCode: 400, body: { error: "run_id and instruction are required" } };
   }
-  const run = createBenchmarkRun({
+  const run = createClawBenchRun({
     accountId: params.account.accountId,
     runId,
     instruction,
     deviceSerial,
   });
   queueMicrotask(() => {
-    markBenchmarkRunRunning({ accountId: params.account.accountId, runId });
-    handleBenchmarkInbound({
+    markClawBenchRunRunning({ accountId: params.account.accountId, runId });
+    handleClawBenchInbound({
       channelId: params.channelId,
       channelLabel: params.channelLabel,
       account: params.account,
@@ -94,7 +94,7 @@ async function handlePostRun(params: StartBenchmarkHttpServerParams, req: Incomi
       run,
     })
       .then((result) => {
-        completeBenchmarkRun({
+        completeClawBenchRun({
           accountId: params.account.accountId,
           runId,
           replyText: result.replyText,
@@ -103,9 +103,9 @@ async function handlePostRun(params: StartBenchmarkHttpServerParams, req: Incomi
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         params.log?.error?.(
-          `[${params.account.accountId}] benchmark run ${runId} failed: ${message}`,
+          `[${params.account.accountId}] clawbench run ${runId} failed: ${message}`,
         );
-        failBenchmarkRun({
+        failClawBenchRun({
           accountId: params.account.accountId,
           runId,
           error: message,
@@ -116,7 +116,7 @@ async function handlePostRun(params: StartBenchmarkHttpServerParams, req: Incomi
 }
 
 async function requestHandler(
-  params: StartBenchmarkHttpServerParams,
+  params: StartClawBenchHttpServerParams,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -142,7 +142,7 @@ async function requestHandler(
     const runMatch = url.pathname.match(/^\/runs\/([^/]+)$/u);
     if (req.method === "GET" && runMatch) {
       const runId = decodeURIComponent(runMatch[1] ?? "");
-      const run = getBenchmarkRunSnapshot({
+      const run = getClawBenchRunSnapshot({
         accountId: params.account.accountId,
         runId,
       });
@@ -182,8 +182,8 @@ function close(server: Server): Promise<void> {
   });
 }
 
-export async function startBenchmarkHttpServer(
-  params: StartBenchmarkHttpServerParams,
+export async function startClawBenchHttpServer(
+  params: StartClawBenchHttpServerParams,
 ): Promise<void> {
   const server = createServer((req, res) => {
     void requestHandler(params, req, res);
@@ -197,7 +197,7 @@ export async function startBenchmarkHttpServer(
   );
   await listen(server, params.account.host, params.account.port);
   params.log?.info?.(
-    `[${params.account.accountId}] benchmark channel listening on ${params.account.baseUrl}`,
+    `[${params.account.accountId}] clawbench channel listening on ${params.account.baseUrl}`,
   );
   await new Promise<void>((resolve) => {
     server.once("close", resolve);

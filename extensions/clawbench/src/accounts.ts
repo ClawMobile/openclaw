@@ -3,41 +3,41 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
-  BenchmarkChannelAccountConfig,
+  ClawBenchChannelAccountConfig,
   CoreConfig,
-  ResolvedBenchmarkChannelAccount,
+  ResolvedClawBenchChannelAccount,
 } from "./types.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8765;
 
 const {
-  listAccountIds: listBenchmarkChannelAccountIds,
-  resolveDefaultAccountId: resolveDefaultBenchmarkChannelAccountId,
-} = createAccountListHelpers("benchmark", { normalizeAccountId });
+  listAccountIds: listClawBenchChannelAccountIds,
+  resolveDefaultAccountId: resolveDefaultClawBenchChannelAccountId,
+} = createAccountListHelpers("clawbench", { normalizeAccountId });
 
-export { listBenchmarkChannelAccountIds, resolveDefaultBenchmarkChannelAccountId };
+export { listClawBenchChannelAccountIds, resolveDefaultClawBenchChannelAccountId };
 
-function resolveMergedBenchmarkAccountConfig(
+function resolveMergedClawBenchAccountConfig(
   cfg: CoreConfig,
   accountId: string,
-): BenchmarkChannelAccountConfig {
-  return resolveMergedAccountConfig<BenchmarkChannelAccountConfig>({
-    channelConfig: cfg.channels?.benchmark as BenchmarkChannelAccountConfig | undefined,
-    accounts: cfg.channels?.benchmark?.accounts,
+): ClawBenchChannelAccountConfig {
+  return resolveMergedAccountConfig<ClawBenchChannelAccountConfig>({
+    channelConfig: cfg.channels?.clawbench as ClawBenchChannelAccountConfig | undefined,
+    accounts: cfg.channels?.clawbench?.accounts,
     accountId,
     omitKeys: ["defaultAccount"],
     normalizeAccountId,
   });
 }
 
-export function resolveBenchmarkChannelAccount(params: {
+export function resolveClawBenchChannelAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
-}): ResolvedBenchmarkChannelAccount {
+}): ResolvedClawBenchChannelAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const section = params.cfg.channels?.benchmark;
-  const merged = resolveMergedBenchmarkAccountConfig(params.cfg, accountId);
+  const section = params.cfg.channels?.clawbench;
+  const merged = resolveMergedClawBenchAccountConfig(params.cfg, accountId);
   const baseEnabled = section?.enabled === true;
   const enabled = baseEnabled && merged.enabled !== false;
   const host = merged.host?.trim() || DEFAULT_HOST;
@@ -60,4 +60,4 @@ export function resolveBenchmarkChannelAccount(params: {
 }
 
 export { DEFAULT_ACCOUNT_ID };
-export type { ResolvedBenchmarkChannelAccount } from "./types.js";
+export type { ResolvedClawBenchChannelAccount } from "./types.js";

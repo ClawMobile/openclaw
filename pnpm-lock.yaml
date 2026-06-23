@@ -387,7 +387,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/benchmark:
+  extensions/clawbench:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

@@ -1,14 +1,14 @@
 ---
-summary: "Local HTTP channel for deterministic benchmark harnesses"
-title: "Benchmark channel"
+summary: "Local HTTP channel for ClawBench harnesses"
+title: "ClawBench channel"
 read_when:
-  - You are wiring an external benchmark harness into OpenClaw
+  - You are wiring an external ClawBench harness into OpenClaw
   - You need a local HTTP trigger surface for automated agent evaluation
-  - You are debugging benchmark run completion polling
+  - You are debugging ClawBench run completion polling
 ---
 
-`benchmark` is a bundled synthetic channel for deterministic agent evaluation.
-It is not a production chat channel. It exists so a benchmark harness can submit
+`clawbench` is a bundled synthetic channel for deterministic agent evaluation.
+It is not a production chat channel. It exists so a ClawBench harness can submit
 one instruction over local HTTP, wait for OpenClaw to finish the agent turn, and
 then verify device state outside OpenClaw.
 
@@ -16,7 +16,7 @@ then verify device state outside OpenClaw.
 
 By default the channel listens on `127.0.0.1:8765`.
 
-Submit a benchmark run:
+Submit a ClawBench run:
 
 ```http
 POST /runs
@@ -47,7 +47,7 @@ The response contains a `run.status` value:
 ```json
 {
   "channels": {
-    "benchmark": {
+    "clawbench": {
       "enabled": true,
       "host": "127.0.0.1",
       "port": 8765,
@@ -66,15 +66,15 @@ Authorization: Bearer optional-local-token
 or:
 
 ```http
-x-openclaw-benchmark-token: optional-local-token
+x-openclaw-clawbench-token: optional-local-token
 ```
 
-Keep the benchmark channel bound to loopback unless you have a separate network
+Keep the ClawBench channel bound to loopback unless you have a separate network
 security layer. The endpoint can trigger arbitrary agent instructions.
 
 ## Verification Boundary
 
-The benchmark channel does not decide whether a task passed. It only handles
-trigger and completion status. The benchmark harness should verify success
+The ClawBench channel does not decide whether a task passed. It only handles
+trigger and completion status. The ClawBench harness should verify success
 directly against the system under test, for example by reading Android state via
 ADB.

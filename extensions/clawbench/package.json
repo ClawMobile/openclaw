@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/benchmark-channel",
+  "name": "@openclaw/clawbench-channel",
   "version": "2026.5.7",
   "private": true,
-  "description": "OpenClaw benchmark channel plugin",
+  "description": "OpenClaw ClawBench channel plugin",
   "type": "module",
   "exports": {
     ".": "./index.ts",
@@ -27,13 +27,13 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "channel": {
-      "id": "benchmark",
-      "label": "Benchmark",
-      "selectionLabel": "Benchmark",
-      "detailLabel": "Benchmark",
-      "docsPath": "/channels/benchmark",
-      "docsLabel": "benchmark",
-      "blurb": "Local HTTP channel for deterministic benchmark harnesses.",
+      "id": "clawbench",
+      "label": "ClawBench",
+      "selectionLabel": "ClawBench",
+      "detailLabel": "ClawBench",
+      "docsPath": "/channels/clawbench",
+      "docsLabel": "clawbench",
+      "blurb": "Local HTTP channel for ClawBench harnesses.",
       "systemImage": "flask-conical",
       "order": 998,
       "exposure": {

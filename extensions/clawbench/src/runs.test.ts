@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  completeBenchmarkRun,
-  createBenchmarkRun,
-  getBenchmarkRunSnapshot,
-  markBenchmarkRunRunning,
+  completeClawBenchRun,
+  createClawBenchRun,
+  getClawBenchRunSnapshot,
+  markClawBenchRunRunning,
 } from "./runs.js";
 
-describe("benchmark run store", () => {
+describe("clawbench run store", () => {
   it("tracks a run through completion", () => {
-    createBenchmarkRun({
+    createClawBenchRun({
       accountId: "default",
       runId: "run-store-complete",
       instruction: "Set the screen brightness to 50%",
@@ -16,13 +16,13 @@ describe("benchmark run store", () => {
     });
 
     expect(
-      markBenchmarkRunRunning({
+      markClawBenchRunRunning({
         accountId: "default",
         runId: "run-store-complete",
       })?.status,
     ).toBe("RUNNING");
     expect(
-      completeBenchmarkRun({
+      completeClawBenchRun({
         accountId: "default",
         runId: "run-store-complete",
         replyText: "Done",
@@ -30,7 +30,7 @@ describe("benchmark run store", () => {
     ).toBe("COMPLETED");
 
     expect(
-      getBenchmarkRunSnapshot({
+      getClawBenchRunSnapshot({
         accountId: "default",
         runId: "run-store-complete",
       }),
@@ -45,18 +45,18 @@ describe("benchmark run store", () => {
   });
 
   it("rejects duplicate active run ids", () => {
-    createBenchmarkRun({
+    createClawBenchRun({
       accountId: "default",
       runId: "run-store-duplicate",
       instruction: "First",
     });
 
     expect(() =>
-      createBenchmarkRun({
+      createClawBenchRun({
         accountId: "default",
         runId: "run-store-duplicate",
         instruction: "Second",
       }),
-    ).toThrow("benchmark run already active");
+    ).toThrow("clawbench run already active");
   });
 });

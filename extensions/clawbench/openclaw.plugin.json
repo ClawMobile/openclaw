@@ -1,9 +1,9 @@
 {
-  "id": "benchmark",
+  "id": "clawbench",
   "activation": {
     "onStartup": false
   },
-  "channels": ["benchmark"],
+  "channels": ["clawbench"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

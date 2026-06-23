@@ -1,15 +1,15 @@
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
-import { startBenchmarkHttpServer } from "./http-server.js";
-import type { CoreConfig, ResolvedBenchmarkChannelAccount } from "./types.js";
+import { startClawBenchHttpServer } from "./http-server.js";
+import type { CoreConfig, ResolvedClawBenchChannelAccount } from "./types.js";
 
-export async function startBenchmarkGatewayAccount(
+export async function startClawBenchGatewayAccount(
   channelId: string,
   channelLabel: string,
-  ctx: ChannelGatewayContext<ResolvedBenchmarkChannelAccount>,
+  ctx: ChannelGatewayContext<ResolvedClawBenchChannelAccount>,
 ): Promise<void> {
   const account = ctx.account;
   if (!account.configured) {
-    throw new Error(`Benchmark channel is not configured for account "${account.accountId}"`);
+    throw new Error(`ClawBench channel is not configured for account "${account.accountId}"`);
   }
   ctx.setStatus({
     accountId: account.accountId,
@@ -19,7 +19,7 @@ export async function startBenchmarkGatewayAccount(
     baseUrl: account.baseUrl,
   });
   try {
-    await startBenchmarkHttpServer({
+    await startClawBenchHttpServer({
       channelId,
       channelLabel,
       account,

@@ -5,53 +5,53 @@ import {
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   DEFAULT_ACCOUNT_ID,
-  listBenchmarkChannelAccountIds,
-  resolveBenchmarkChannelAccount,
-  resolveDefaultBenchmarkChannelAccountId,
+  listClawBenchChannelAccountIds,
+  resolveClawBenchChannelAccount,
+  resolveDefaultClawBenchChannelAccountId,
 } from "./accounts.js";
-import { benchmarkChannelPluginConfigSchema } from "./config-schema.js";
-import { startBenchmarkGatewayAccount } from "./gateway.js";
-import { sendBenchmarkChannelText } from "./outbound.js";
-import { applyBenchmarkSetup } from "./setup.js";
-import { benchmarkChannelStatus } from "./status.js";
-import { buildBenchmarkTarget, parseBenchmarkTarget } from "./target.js";
-import type { CoreConfig, ResolvedBenchmarkChannelAccount } from "./types.js";
+import { clawBenchChannelPluginConfigSchema } from "./config-schema.js";
+import { startClawBenchGatewayAccount } from "./gateway.js";
+import { sendClawBenchChannelText } from "./outbound.js";
+import { applyClawBenchSetup } from "./setup.js";
+import { clawBenchChannelStatus } from "./status.js";
+import { buildClawBenchTarget, parseClawBenchTarget } from "./target.js";
+import type { CoreConfig, ResolvedClawBenchChannelAccount } from "./types.js";
 
-const CHANNEL_ID = "benchmark" as const;
+const CHANNEL_ID = "clawbench" as const;
 const meta = { ...getChatChannelMeta(CHANNEL_ID) };
 
-export const benchmarkChannelPlugin = createChatChannelPlugin<ResolvedBenchmarkChannelAccount>({
+export const clawBenchChannelPlugin = createChatChannelPlugin<ResolvedClawBenchChannelAccount>({
   base: {
     id: CHANNEL_ID,
     meta,
     capabilities: {
       chatTypes: ["direct"],
     },
-    reload: { configPrefixes: ["channels.benchmark"] },
-    configSchema: benchmarkChannelPluginConfigSchema,
+    reload: { configPrefixes: ["channels.clawbench"] },
+    configSchema: clawBenchChannelPluginConfigSchema,
     setup: {
       applyAccountConfig: ({ cfg, accountId, input }) =>
-        applyBenchmarkSetup({
+        applyClawBenchSetup({
           cfg,
           accountId,
           input: input as Record<string, unknown>,
         }),
     },
     config: {
-      listAccountIds: (cfg) => listBenchmarkChannelAccountIds(cfg as CoreConfig),
+      listAccountIds: (cfg) => listClawBenchChannelAccountIds(cfg as CoreConfig),
       resolveAccount: (cfg, accountId) =>
-        resolveBenchmarkChannelAccount({ cfg: cfg as CoreConfig, accountId }),
-      defaultAccountId: (cfg) => resolveDefaultBenchmarkChannelAccountId(cfg as CoreConfig),
+        resolveClawBenchChannelAccount({ cfg: cfg as CoreConfig, accountId }),
+      defaultAccountId: (cfg) => resolveDefaultClawBenchChannelAccountId(cfg as CoreConfig),
       isConfigured: (account) => account.configured,
       resolveAllowFrom: ({ cfg, accountId }) =>
-        resolveBenchmarkChannelAccount({ cfg: cfg as CoreConfig, accountId }).config.allowFrom,
+        resolveClawBenchChannelAccount({ cfg: cfg as CoreConfig, accountId }).config.allowFrom,
       resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveBenchmarkChannelAccount({ cfg: cfg as CoreConfig, accountId }).config.defaultTo,
+        resolveClawBenchChannelAccount({ cfg: cfg as CoreConfig, accountId }).config.defaultTo,
     },
     messaging: {
-      normalizeTarget: (raw) => buildBenchmarkTarget(parseBenchmarkTarget(raw)),
+      normalizeTarget: (raw) => buildClawBenchTarget(parseClawBenchTarget(raw)),
       parseExplicitTarget: ({ raw }) => ({
-        to: buildBenchmarkTarget(parseBenchmarkTarget(raw)),
+        to: buildClawBenchTarget(parseClawBenchTarget(raw)),
         chatType: "direct",
       }),
       inferTargetChatType: () => "direct",
@@ -60,7 +60,7 @@ export const benchmarkChannelPlugin = createChatChannelPlugin<ResolvedBenchmarkC
         hint: "<run:run_id>",
       },
       resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
-        const normalizedTarget = buildBenchmarkTarget(parseBenchmarkTarget(target));
+        const normalizedTarget = buildClawBenchTarget(parseClawBenchTarget(target));
         return buildChannelOutboundSessionRoute({
           cfg,
           agentId,
@@ -71,16 +71,16 @@ export const benchmarkChannelPlugin = createChatChannelPlugin<ResolvedBenchmarkC
             id: normalizedTarget,
           },
           chatType: "direct",
-          from: `benchmark:${accountId ?? DEFAULT_ACCOUNT_ID}`,
+          from: `clawbench:${accountId ?? DEFAULT_ACCOUNT_ID}`,
           to: normalizedTarget,
         });
       },
       resolveSessionConversation: () => null,
     },
-    status: benchmarkChannelStatus,
+    status: clawBenchChannelStatus,
     gateway: {
       startAccount: async (ctx) => {
-        await startBenchmarkGatewayAccount(CHANNEL_ID, meta.label, ctx);
+        await startClawBenchGatewayAccount(CHANNEL_ID, meta.label, ctx);
       },
     },
   },
@@ -91,7 +91,7 @@ export const benchmarkChannelPlugin = createChatChannelPlugin<ResolvedBenchmarkC
     attachedResults: {
       channel: CHANNEL_ID,
       sendText: async ({ cfg, to, text, accountId }) =>
-        await sendBenchmarkChannelText({
+        await sendClawBenchChannelText({
           cfg: cfg as CoreConfig,
           accountId,
           to,

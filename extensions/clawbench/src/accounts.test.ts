@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveBenchmarkChannelAccount } from "./accounts.js";
+import { resolveClawBenchChannelAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
-describe("benchmark account resolution", () => {
-  it("is unconfigured until the benchmark channel config exists", () => {
-    const account = resolveBenchmarkChannelAccount({ cfg: {} });
+describe("clawbench account resolution", () => {
+  it("is unconfigured until the clawbench channel config exists", () => {
+    const account = resolveClawBenchChannelAccount({ cfg: {} });
 
     expect(account.configured).toBe(false);
     expect(account.enabled).toBe(false);
@@ -14,13 +14,13 @@ describe("benchmark account resolution", () => {
   it("uses loopback defaults when enabled", () => {
     const cfg: CoreConfig = {
       channels: {
-        benchmark: {
+        clawbench: {
           enabled: true,
         },
       },
     };
 
-    const account = resolveBenchmarkChannelAccount({ cfg });
+    const account = resolveClawBenchChannelAccount({ cfg });
 
     expect(account.configured).toBe(true);
     expect(account.enabled).toBe(true);

@@ -1,19 +1,19 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
-import type { BenchmarkRunRecord } from "./runs.js";
-import { getBenchmarkChannelRuntime } from "./runtime.js";
-import { buildBenchmarkTarget } from "./target.js";
-import type { CoreConfig, ResolvedBenchmarkChannelAccount } from "./types.js";
+import type { ClawBenchRunRecord } from "./runs.js";
+import { getClawBenchChannelRuntime } from "./runtime.js";
+import { buildClawBenchTarget } from "./target.js";
+import type { CoreConfig, ResolvedClawBenchChannelAccount } from "./types.js";
 
-export async function handleBenchmarkInbound(params: {
+export async function handleClawBenchInbound(params: {
   channelId: string;
   channelLabel: string;
-  account: ResolvedBenchmarkChannelAccount;
+  account: ResolvedClawBenchChannelAccount;
   config: CoreConfig;
-  run: BenchmarkRunRecord;
+  run: ClawBenchRunRecord;
 }): Promise<{ replyText?: string }> {
-  const runtime = getBenchmarkChannelRuntime();
-  const target = buildBenchmarkTarget({ runId: params.run.runId });
+  const runtime = getClawBenchChannelRuntime();
+  const target = buildClawBenchTarget({ runId: params.run.runId });
   const route = runtime.channel.routing.resolveAgentRoute({
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
@@ -49,7 +49,7 @@ export async function handleBenchmarkInbound(params: {
     SessionKey: route.sessionKey,
     AccountId: route.accountId ?? params.account.accountId,
     ChatType: "direct",
-    ConversationLabel: `Benchmark ${params.run.runId}`,
+    ConversationLabel: `ClawBench ${params.run.runId}`,
     SenderName: "ClawBench",
     SenderId: "clawbench",
     Provider: params.channelId,
@@ -82,12 +82,12 @@ export async function handleBenchmarkInbound(params: {
     onRecordError: (error) => {
       throw error instanceof Error
         ? error
-        : new Error(`benchmark session record failed: ${String(error)}`);
+        : new Error(`clawbench session record failed: ${String(error)}`);
     },
     onDispatchError: (error) => {
       throw error instanceof Error
         ? error
-        : new Error(`benchmark dispatch failed: ${String(error)}`);
+        : new Error(`clawbench dispatch failed: ${String(error)}`);
     },
   });
 

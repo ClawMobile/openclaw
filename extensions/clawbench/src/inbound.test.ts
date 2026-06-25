@@ -44,7 +44,50 @@ describe("clawbench inbound", () => {
       trajectoryFile,
       [
         JSON.stringify({ type: "session.started", data: { runId: "run-1" } }),
-        JSON.stringify({ type: "model.completed", data: { latencyMs: 42 } }),
+        JSON.stringify({
+          type: "prompt.submitted",
+          data: { prompt: "Do it", systemPrompt: "hidden internal prompt" },
+        }),
+        JSON.stringify({
+          type: "model.completed",
+          data: {
+            usage: { input: 10, output: 2 },
+            messagesSnapshot: [
+              {
+                role: "assistant",
+                timestamp: 100,
+                content: [
+                  {
+                    type: "thinking",
+                    thinkingSignature: "do-not-return",
+                  },
+                  {
+                    type: "toolCall",
+                    name: "android_shell",
+                    arguments: { cmd: "settings put system screen_brightness 128" },
+                  },
+                ],
+              },
+              {
+                role: "toolResult",
+                timestamp: 101,
+                toolName: "android_shell",
+                isError: false,
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({ ok: true, code: 0, stdout: "128\n", stderr: "" }),
+                  },
+                ],
+              },
+              {
+                role: "assistant",
+                timestamp: 102,
+                content: [{ type: "text", text: "Done" }],
+              },
+            ],
+          },
+        }),
       ].join("\n") + "\n",
       "utf8",
     );
@@ -113,18 +156,41 @@ describe("clawbench inbound", () => {
     expect(result.metrics.runtimeTrajectory).toMatchObject({
       available: true,
       sessionId: "session-1",
-      observedEventCount: 2,
-      parsedEventCount: 2,
-      returnedEventCount: 2,
+      observedEventCount: 3,
+      parsedEventCount: 3,
+      compactStepCount: 6,
+      returnedStepCount: 6,
       fileTruncated: false,
     });
-    expect(result.trajectory).toEqual(
-      expect.arrayContaining([
+    const runtimeTrajectory = result.trajectory.find(
+      (event) => event.event === "runtime.trajectory",
+    );
+    expect(runtimeTrajectory).toBeTruthy();
+    expect(runtimeTrajectory).not.toHaveProperty("events");
+    expect(runtimeTrajectory).toMatchObject({
+      steps: expect.arrayContaining([
         expect.objectContaining({
-          event: "runtime.trajectory",
-          events: expect.arrayContaining([expect.objectContaining({ type: "model.completed" })]),
+          type: "tool.call",
+          toolName: "android_shell",
+          arguments: expect.objectContaining({
+            cmd: "settings put system screen_brightness 128",
+          }),
+        }),
+        expect.objectContaining({
+          type: "tool.result",
+          toolName: "android_shell",
+          result: expect.objectContaining({
+            ok: true,
+            stdout: "128\n",
+          }),
+        }),
+        expect.objectContaining({
+          type: "assistant.text",
+          text: "Done",
         }),
       ]),
-    );
+    });
+    expect(JSON.stringify(result.trajectory)).not.toContain("hidden internal prompt");
+    expect(JSON.stringify(result.trajectory)).not.toContain("do-not-return");
   });
 });

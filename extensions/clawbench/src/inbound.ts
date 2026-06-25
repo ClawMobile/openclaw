@@ -22,7 +22,8 @@ export type ClawBenchInboundResult = {
 };
 
 const DEFAULT_RUNTIME_TRAJECTORY_MAX_BYTES = 1024 * 1024;
-const DEFAULT_RUNTIME_TRAJECTORY_MAX_EVENTS = 200;
+const DEFAULT_RUNTIME_TRAJECTORY_MAX_STEPS = 200;
+const DEFAULT_RUNTIME_TRAJECTORY_TEXT_MAX_CHARS = 4096;
 
 function elapsedMs(startAt: number, endAt: number): number {
   return Math.max(0, endAt - startAt);
@@ -40,9 +41,222 @@ function compactNumberRecord(
   return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function positiveIntegerEnv(name: string, fallback: number): number {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function compactText(value: unknown, maxChars: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, maxChars)}...[truncated ${value.length - maxChars} chars]`;
+}
+
+function compactJsonValue(value: unknown, maxTextChars: number, depth = 0): ClawBenchJsonValue {
+  if (value === undefined) {
+    return null;
+  }
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return compactText(value, maxTextChars) ?? "";
+  }
+  if (depth >= 4) {
+    return { truncated: true, reason: "trajectory-depth-limit" };
+  }
+  if (Array.isArray(value)) {
+    const items = value.slice(0, 20).map((item) => compactJsonValue(item, maxTextChars, depth + 1));
+    if (value.length > items.length) {
+      items.push({
+        truncated: true,
+        reason: "trajectory-array-limit",
+        originalLength: value.length,
+      });
+    }
+    return items;
+  }
+  if (isRecord(value)) {
+    const result: Record<string, ClawBenchJsonValue> = {};
+    const entries = Object.entries(value).slice(0, 40);
+    for (const [key, item] of entries) {
+      result[key] = compactJsonValue(item, maxTextChars, depth + 1);
+    }
+    if (Object.keys(value).length > entries.length) {
+      result._truncated = {
+        truncated: true,
+        reason: "trajectory-object-key-limit",
+        originalKeys: Object.keys(value).length,
+      };
+    }
+    return result;
+  }
+  return String(value);
+}
+
+function textFromContent(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const textParts = content.flatMap((item): string[] => {
+    if (isRecord(item) && item.type === "text" && typeof item.text === "string") {
+      return [item.text];
+    }
+    return [];
+  });
+  return textParts.join("\n") || undefined;
+}
+
+function parseJsonText(text: string | undefined): unknown {
+  if (!text) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function summarizeToolResult(content: unknown, maxTextChars: number): ClawBenchJsonValue {
+  const text = textFromContent(content);
+  const parsed = parseJsonText(text);
+  if (!isRecord(parsed)) {
+    return { text: compactText(text, maxTextChars) ?? "" };
+  }
+
+  const summary: Record<string, ClawBenchJsonValue> = {};
+  for (const key of ["ok", "status", "code", "stdout", "stderr", "mode", "stage", "method"]) {
+    if (key in parsed) {
+      summary[key] = compactJsonValue(parsed[key], maxTextChars);
+    }
+  }
+  const backends = parsed.backends;
+  if (isRecord(backends) && isRecord(backends.adb)) {
+    summary.adb = {
+      ready: compactJsonValue(backends.adb.ready, maxTextChars),
+      state: compactJsonValue(backends.adb.state, maxTextChars),
+      deviceCount: Array.isArray(backends.adb.devices) ? backends.adb.devices.length : 0,
+    };
+  }
+  return Object.keys(summary).length ? summary : compactJsonValue(parsed, maxTextChars);
+}
+
+function compactMessagesSnapshot(messages: unknown, maxTextChars: number): ClawBenchJsonValue[] {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+  const steps: ClawBenchJsonValue[] = [];
+  for (const message of messages) {
+    if (!isRecord(message)) {
+      continue;
+    }
+    const role = typeof message.role === "string" ? message.role : undefined;
+    const at = typeof message.timestamp === "number" ? message.timestamp : undefined;
+    if (role === "assistant" && Array.isArray(message.content)) {
+      for (const item of message.content) {
+        if (!isRecord(item)) {
+          continue;
+        }
+        if (item.type === "toolCall") {
+          steps.push({
+            type: "tool.call",
+            at: at ?? null,
+            toolName: typeof item.name === "string" ? item.name : "",
+            arguments: compactJsonValue(item.arguments, maxTextChars),
+          });
+        } else if (item.type === "text" && typeof item.text === "string") {
+          steps.push({
+            type: "assistant.text",
+            at: at ?? null,
+            text: compactText(item.text, maxTextChars) ?? "",
+          });
+        }
+      }
+    } else if (role === "toolResult") {
+      steps.push({
+        type: "tool.result",
+        at: at ?? null,
+        toolName: typeof message.toolName === "string" ? message.toolName : "",
+        isError: Boolean(message.isError),
+        result: summarizeToolResult(message.content, maxTextChars),
+      });
+    }
+  }
+  return steps;
+}
+
+function compactRuntimeTrajectoryEvents(params: {
+  parsedEvents: ClawBenchJsonValue[];
+  maxSteps: number;
+  maxTextChars: number;
+}): { steps: ClawBenchJsonValue[]; stepsTruncated: boolean; totalSteps: number } {
+  const steps: ClawBenchJsonValue[] = [];
+  for (const event of params.parsedEvents) {
+    if (!isRecord(event)) {
+      continue;
+    }
+    const type = typeof event.type === "string" ? event.type : undefined;
+    const data = isRecord(event.data) ? event.data : {};
+    const ts = typeof event.ts === "string" ? event.ts : undefined;
+    if (type === "session.started") {
+      steps.push({
+        type,
+        ts: ts ?? "",
+        provider: compactJsonValue(event.provider, params.maxTextChars),
+        modelId: compactJsonValue(event.modelId, params.maxTextChars),
+        toolCount: compactJsonValue(data.toolCount, params.maxTextChars),
+      });
+    } else if (type === "prompt.submitted") {
+      steps.push({
+        type,
+        ts: ts ?? "",
+        prompt: compactText(data.prompt, params.maxTextChars) ?? "",
+        imagesCount: compactJsonValue(data.imagesCount ?? 0, params.maxTextChars),
+      });
+    } else if (type === "model.completed") {
+      steps.push(...compactMessagesSnapshot(data.messagesSnapshot, params.maxTextChars));
+      steps.push({
+        type,
+        ts: ts ?? "",
+        status: data.timedOut ? "timeout" : data.aborted ? "aborted" : "completed",
+        usage: compactJsonValue(data.usage, params.maxTextChars),
+      });
+    } else if (type === "trace.artifacts") {
+      steps.push({
+        type,
+        ts: ts ?? "",
+        finalStatus: compactJsonValue(data.finalStatus, params.maxTextChars),
+        itemLifecycle: compactJsonValue(data.itemLifecycle, params.maxTextChars),
+        toolMetas: compactJsonValue(data.toolMetas, params.maxTextChars),
+      });
+    } else if (type === "session.ended") {
+      steps.push({
+        type,
+        ts: ts ?? "",
+        status: compactJsonValue(data.status, params.maxTextChars),
+        timedOut: compactJsonValue(data.timedOut ?? false, params.maxTextChars),
+        aborted: compactJsonValue(data.aborted ?? false, params.maxTextChars),
+      });
+    }
+  }
+  const returnedSteps = steps.length > params.maxSteps ? steps.slice(-params.maxSteps) : steps;
+  return {
+    steps: returnedSteps,
+    stepsTruncated: steps.length > returnedSteps.length,
+    totalSteps: steps.length,
+  };
 }
 
 function resolveTrajectoryPointerFilePath(sessionFile: string): string {
@@ -148,9 +362,13 @@ function readRuntimeTrajectorySnapshot(params: {
       "CLAWBENCH_RUNTIME_TRAJECTORY_MAX_BYTES",
       DEFAULT_RUNTIME_TRAJECTORY_MAX_BYTES,
     );
-    const maxEvents = positiveIntegerEnv(
-      "CLAWBENCH_RUNTIME_TRAJECTORY_MAX_EVENTS",
-      DEFAULT_RUNTIME_TRAJECTORY_MAX_EVENTS,
+    const maxSteps = positiveIntegerEnv(
+      "CLAWBENCH_RUNTIME_TRAJECTORY_MAX_STEPS",
+      DEFAULT_RUNTIME_TRAJECTORY_MAX_STEPS,
+    );
+    const maxTextChars = positiveIntegerEnv(
+      "CLAWBENCH_RUNTIME_TRAJECTORY_TEXT_MAX_CHARS",
+      DEFAULT_RUNTIME_TRAJECTORY_TEXT_MAX_CHARS,
     );
     const { text, fileBytes, fileTruncated } = readFileTail({
       filePath: runtimeFile,
@@ -169,23 +387,25 @@ function readRuntimeTrajectorySnapshot(params: {
         return [];
       }
     });
-    const returnedEvents =
-      parsedEvents.length > maxEvents ? parsedEvents.slice(-maxEvents) : parsedEvents;
+    const compact = compactRuntimeTrajectoryEvents({
+      parsedEvents,
+      maxSteps,
+      maxTextChars,
+    });
     return {
       event: "runtime.trajectory",
       at: params.at,
       sessionKey: params.sessionKey,
       sessionId: entry.sessionId,
-      sessionFile,
-      runtimeFile,
       fileBytes,
       fileTruncated,
       observedEventCount: lines.length,
       parsedEventCount: parsedEvents.length,
-      returnedEventCount: returnedEvents.length,
-      eventsTruncated: parsedEvents.length > returnedEvents.length,
+      compactStepCount: compact.totalSteps,
+      returnedStepCount: compact.steps.length,
+      stepsTruncated: compact.stepsTruncated,
       parseErrorCount,
-      events: returnedEvents,
+      steps: compact.steps,
     };
   } catch (error) {
     return {
@@ -361,10 +581,11 @@ export async function handleClawBenchInbound(params: {
       sessionId: runtimeTrajectory.sessionId ?? null,
       observedEventCount: runtimeTrajectory.observedEventCount ?? 0,
       parsedEventCount: runtimeTrajectory.parsedEventCount ?? 0,
-      returnedEventCount: runtimeTrajectory.returnedEventCount ?? 0,
+      compactStepCount: runtimeTrajectory.compactStepCount ?? 0,
+      returnedStepCount: runtimeTrajectory.returnedStepCount ?? 0,
       fileBytes: runtimeTrajectory.fileBytes ?? 0,
       fileTruncated: runtimeTrajectory.fileTruncated ?? false,
-      eventsTruncated: runtimeTrajectory.eventsTruncated ?? false,
+      stepsTruncated: runtimeTrajectory.stepsTruncated ?? false,
       parseErrorCount: runtimeTrajectory.parseErrorCount ?? 0,
       error: runtimeTrajectory.error ?? null,
     };

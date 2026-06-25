@@ -26,6 +26,19 @@ describe("clawbench run store", () => {
         accountId: "default",
         runId: "run-store-complete",
         replyText: "Done",
+        latency: {
+          totalMs: 42,
+          dispatchMs: 40,
+        },
+        metrics: {
+          replyCount: 1,
+        },
+        trajectory: [
+          {
+            event: "run.completed",
+            at: 123,
+          },
+        ],
       })?.status,
     ).toBe("COMPLETED");
 
@@ -41,6 +54,19 @@ describe("clawbench run store", () => {
       deviceSerial: "device-1",
       status: "COMPLETED",
       replyText: "Done",
+      latency: {
+        totalMs: 42,
+        dispatchMs: 40,
+      },
+      metrics: {
+        replyCount: 1,
+      },
+      trajectory: [
+        {
+          event: "run.completed",
+          at: 123,
+        },
+      ],
     });
   });
 

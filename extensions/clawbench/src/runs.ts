@@ -1,5 +1,22 @@
 export type ClawBenchRunStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
 
+export type ClawBenchJsonValue =
+  | null
+  | string
+  | number
+  | boolean
+  | ClawBenchJsonValue[]
+  | { [key: string]: ClawBenchJsonValue };
+
+export type ClawBenchRunLatency = Record<string, ClawBenchJsonValue>;
+export type ClawBenchRunMetrics = Record<string, ClawBenchJsonValue>;
+export type ClawBenchRunTrajectoryEvent = {
+  event: string;
+  at: number;
+  [key: string]: ClawBenchJsonValue;
+};
+export type ClawBenchRunTrajectory = ClawBenchRunTrajectoryEvent[];
+
 export type ClawBenchRunRecord = {
   accountId: string;
   runId: string;
@@ -11,6 +28,9 @@ export type ClawBenchRunRecord = {
   completedAt?: number;
   replyText?: string;
   error?: string;
+  latency?: ClawBenchRunLatency;
+  metrics?: ClawBenchRunMetrics;
+  trajectory?: ClawBenchRunTrajectory;
 };
 
 const runsByAccount = new Map<string, Map<string, ClawBenchRunRecord>>();
@@ -66,6 +86,9 @@ export function completeClawBenchRun(params: {
   accountId: string;
   runId: string;
   replyText?: string;
+  latency?: ClawBenchRunLatency;
+  metrics?: ClawBenchRunMetrics;
+  trajectory?: ClawBenchRunTrajectory;
 }): ClawBenchRunRecord | null {
   const record = accountRuns(params.accountId).get(params.runId);
   if (!record) {
@@ -77,6 +100,9 @@ export function completeClawBenchRun(params: {
   record.completedAt = now;
   record.replyText = params.replyText;
   record.error = undefined;
+  record.latency = params.latency;
+  record.metrics = params.metrics;
+  record.trajectory = params.trajectory;
   return { ...record };
 }
 
@@ -84,6 +110,9 @@ export function failClawBenchRun(params: {
   accountId: string;
   runId: string;
   error: string;
+  latency?: ClawBenchRunLatency;
+  metrics?: ClawBenchRunMetrics;
+  trajectory?: ClawBenchRunTrajectory;
 }): ClawBenchRunRecord | null {
   const record = accountRuns(params.accountId).get(params.runId);
   if (!record) {
@@ -94,6 +123,9 @@ export function failClawBenchRun(params: {
   record.updatedAt = now;
   record.completedAt = now;
   record.error = params.error;
+  record.latency = params.latency;
+  record.metrics = params.metrics;
+  record.trajectory = params.trajectory;
   return { ...record };
 }
 

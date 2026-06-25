@@ -98,10 +98,14 @@ async function handlePostRun(params: StartClawBenchHttpServerParams, req: Incomi
           accountId: params.account.accountId,
           runId,
           replyText: result.replyText,
+          latency: result.latency,
+          metrics: result.metrics,
+          trajectory: result.trajectory,
         });
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
+        const failedAt = Date.now();
         params.log?.error?.(
           `[${params.account.accountId}] clawbench run ${runId} failed: ${message}`,
         );
@@ -109,6 +113,22 @@ async function handlePostRun(params: StartClawBenchHttpServerParams, req: Incomi
           accountId: params.account.accountId,
           runId,
           error: message,
+          latency: {
+            totalMs: Math.max(0, failedAt - run.createdAt),
+          },
+          trajectory: [
+            {
+              event: "run.created",
+              at: run.createdAt,
+              status: "QUEUED",
+            },
+            {
+              event: "run.failed",
+              at: failedAt,
+              status: "FAILED",
+              error: message,
+            },
+          ],
         });
       });
   });

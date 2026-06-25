@@ -14,7 +14,11 @@ import {
   runChannelTurn,
   runPreparedChannelTurn,
 } from "../channels/turn/kernel.js";
-import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
+import type {
+  DispatchedChannelTurnResult,
+  PreparedChannelTurn,
+  RunChannelTurnParams,
+} from "../channels/turn/types.js";
 export type { ChannelTurnRecordOptions } from "../channels/turn/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
@@ -119,9 +123,9 @@ export async function dispatchInboundReplyWithBase(
       RecordInboundSessionAndDispatchReplyParams,
       "deliver" | "onRecordError" | "onDispatchError" | "replyOptions"
     >,
-): Promise<void> {
+): Promise<DispatchedChannelTurnResult<DispatchFromConfigResult>> {
   const dispatchBase = buildInboundReplyDispatchBase(params);
-  await recordInboundSessionAndDispatchReply({
+  return await recordInboundSessionAndDispatchReply({
     ...dispatchBase,
     deliver: params.deliver,
     onRecordError: params.onRecordError,
@@ -145,7 +149,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
   onRecordError: (err: unknown) => void;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
   replyOptions?: ReplyOptionsWithoutModelSelected;
-}): Promise<void> {
+}): Promise<DispatchedChannelTurnResult<DispatchFromConfigResult>> {
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -154,7 +158,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
   });
   const deliver = createNormalizedOutboundDeliverer(params.deliver);
 
-  await runPreparedChannelTurn({
+  return await runPreparedChannelTurn({
     channel: params.channel,
     accountId: params.accountId,
     routeSessionKey: params.routeSessionKey,

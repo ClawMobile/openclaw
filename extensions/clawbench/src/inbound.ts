@@ -201,8 +201,16 @@ function compactRuntimeTrajectoryEvents(params: {
   parsedEvents: ClawBenchJsonValue[];
   maxSteps: number;
   maxTextChars: number;
-}): { steps: ClawBenchJsonValue[]; stepsTruncated: boolean; totalSteps: number } {
+}): {
+  steps: ClawBenchJsonValue[];
+  stepsTruncated: boolean;
+  totalSteps: number;
+  modelCallEvents: ClawBenchJsonValue[];
+  captureTruncated: boolean;
+} {
   const steps: ClawBenchJsonValue[] = [];
+  const modelCallEvents: ClawBenchJsonValue[] = [];
+  let captureTruncated = false;
   for (const event of params.parsedEvents) {
     if (!isRecord(event)) {
       continue;
@@ -224,6 +232,16 @@ function compactRuntimeTrajectoryEvents(params: {
         ts: ts ?? "",
         prompt: compactText(data.prompt, params.maxTextChars) ?? "",
         imagesCount: compactJsonValue(data.imagesCount ?? 0, params.maxTextChars),
+      });
+    } else if (
+      type === "model.call.started" ||
+      type === "model.call.completed" ||
+      type === "model.call.error"
+    ) {
+      modelCallEvents.push({
+        type,
+        ts: ts ?? "",
+        callId: compactJsonValue(data.callId, params.maxTextChars),
       });
     } else if (type === "model.completed") {
       steps.push(...compactMessagesSnapshot(data.messagesSnapshot, params.maxTextChars));
@@ -249,6 +267,8 @@ function compactRuntimeTrajectoryEvents(params: {
         timedOut: compactJsonValue(data.timedOut ?? false, params.maxTextChars),
         aborted: compactJsonValue(data.aborted ?? false, params.maxTextChars),
       });
+    } else if (type === "trace.truncated") {
+      captureTruncated = true;
     }
   }
   const returnedSteps = steps.length > params.maxSteps ? steps.slice(-params.maxSteps) : steps;
@@ -256,6 +276,8 @@ function compactRuntimeTrajectoryEvents(params: {
     steps: returnedSteps,
     stepsTruncated: steps.length > returnedSteps.length,
     totalSteps: steps.length,
+    modelCallEvents,
+    captureTruncated,
   };
 }
 
@@ -404,6 +426,8 @@ function readRuntimeTrajectorySnapshot(params: {
       compactStepCount: compact.totalSteps,
       returnedStepCount: compact.steps.length,
       stepsTruncated: compact.stepsTruncated,
+      modelCallEvents: compact.modelCallEvents,
+      captureTruncated: compact.captureTruncated,
       parseErrorCount,
       steps: compact.steps,
     };
@@ -586,6 +610,10 @@ export async function handleClawBenchInbound(params: {
       fileBytes: runtimeTrajectory.fileBytes ?? 0,
       fileTruncated: runtimeTrajectory.fileTruncated ?? false,
       stepsTruncated: runtimeTrajectory.stepsTruncated ?? false,
+      modelCallEventCount: Array.isArray(runtimeTrajectory.modelCallEvents)
+        ? runtimeTrajectory.modelCallEvents.length
+        : 0,
+      captureTruncated: runtimeTrajectory.captureTruncated ?? false,
       parseErrorCount: runtimeTrajectory.parseErrorCount ?? 0,
       error: runtimeTrajectory.error ?? null,
     };

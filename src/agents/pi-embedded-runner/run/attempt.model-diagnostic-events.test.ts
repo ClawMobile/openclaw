@@ -46,6 +46,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   });
 
   it("emits started and completed events for async streams", async () => {
+    const timingEvents: Array<{ callId: string; outcome?: "completed" | "error" }> = [];
     async function* stream() {
       yield { type: "text", text: "ok" };
     }
@@ -79,6 +80,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
           spanId: "00f067aa0ba902b7",
         }),
         nextCallId: () => "call-1",
+        onCallStarted: (event) => timingEvents.push(event),
+        onCallEnded: (event) => timingEvents.push(event),
       },
     );
 
@@ -118,6 +121,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       timeToFirstByteMs: expect.any(Number),
     });
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+    expect(timingEvents).toEqual([
+      { callId: "call-1" },
+      { callId: "call-1", outcome: "completed" },
+    ]);
   });
 
   it("counts async onPayload replacements instead of raw payload content", async () => {

@@ -35,6 +35,8 @@ type ModelCallDiagnosticContext = {
   transport?: string;
   trace: DiagnosticTraceContext;
   nextCallId: () => string;
+  onCallStarted?: (event: { callId: string }) => void;
+  onCallEnded?: (event: { callId: string; outcome: "completed" | "error" }) => void;
 };
 
 type ModelCallEventBase = Omit<
@@ -64,11 +66,20 @@ type ModelCallObservationState = {
   requestPayloadBytes?: number;
   responseStreamBytes: number;
   timeToFirstByteMs?: number;
+  onCallEnded?: ModelCallDiagnosticContext["onCallEnded"];
 };
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 const TRACEPARENT_HEADER_NAME = "traceparent";
 type ModelCallStreamOptions = Parameters<StreamFn>[2];
+
+function notifyModelCallTiming<T>(callback: ((event: T) => void) | undefined, event: T): void {
+  try {
+    callback?.(event);
+  } catch {
+    // Timing capture is observational and must never affect the model call.
+  }
+}
 
 function utf8JsonByteLength(value: unknown): number | undefined {
   try {
@@ -249,6 +260,10 @@ function emitModelCallCompleted(
 ): void {
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
+  notifyModelCallTiming(state.onCallEnded, {
+    callId: eventBase.callId,
+    outcome: "completed",
+  });
   emitTrustedDiagnosticEvent({
     type: "model.call.completed",
     ...eventBase,
@@ -270,6 +285,10 @@ function emitModelCallError(
 ): void {
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
+  notifyModelCallTiming(state.onCallEnded, {
+    callId: eventBase.callId,
+    outcome: "error",
+  });
   emitTrustedDiagnosticEvent({
     type: "model.call.error",
     ...eventBase,
@@ -454,7 +473,11 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     const eventBase = baseModelCallEvent(ctx, callId, trace);
     emitModelCallStarted(eventBase);
     const startedAt = Date.now();
-    const state: ModelCallObservationState = { responseStreamBytes: 0 };
+    notifyModelCallTiming(ctx.onCallStarted, { callId });
+    const state: ModelCallObservationState = {
+      responseStreamBytes: 0,
+      ...(ctx.onCallEnded ? { onCallEnded: ctx.onCallEnded } : {}),
+    };
     const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);
 
     try {

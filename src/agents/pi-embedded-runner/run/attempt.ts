@@ -2151,7 +2151,17 @@ export async function runEmbeddedAttempt(
           api: params.model.api,
           transport: effectiveAgentTransport,
           trace: runTrace,
-          nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+          nextCallId: () =>
+            `${params.runId}:${runTrace.spanId ?? "attempt"}:model:${(diagnosticModelCallSeq += 1)}`,
+          onCallStarted: ({ callId }) => {
+            trajectoryRecorder?.recordEvent("model.call.started", { callId });
+          },
+          onCallEnded: ({ callId, outcome }) => {
+            trajectoryRecorder?.recordEvent(
+              outcome === "completed" ? "model.call.completed" : "model.call.error",
+              { callId },
+            );
+          },
         },
       );
 

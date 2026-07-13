@@ -49,6 +49,16 @@ describe("clawbench inbound", () => {
           data: { prompt: "Do it", systemPrompt: "hidden internal prompt" },
         }),
         JSON.stringify({
+          type: "model.call.started",
+          ts: "2026-07-13T10:00:00.000Z",
+          data: { callId: "run-1:model:1" },
+        }),
+        JSON.stringify({
+          type: "model.call.completed",
+          ts: "2026-07-13T10:00:01.250Z",
+          data: { callId: "run-1:model:1" },
+        }),
+        JSON.stringify({
           type: "model.completed",
           data: {
             usage: { input: 10, output: 2 },
@@ -156,10 +166,11 @@ describe("clawbench inbound", () => {
     expect(result.metrics.runtimeTrajectory).toMatchObject({
       available: true,
       sessionId: "session-1",
-      observedEventCount: 3,
-      parsedEventCount: 3,
+      observedEventCount: 5,
+      parsedEventCount: 5,
       compactStepCount: 6,
       returnedStepCount: 6,
+      modelCallEventCount: 2,
       fileTruncated: false,
     });
     const runtimeTrajectory = result.trajectory.find(
@@ -168,6 +179,18 @@ describe("clawbench inbound", () => {
     expect(runtimeTrajectory).toBeTruthy();
     expect(runtimeTrajectory).not.toHaveProperty("events");
     expect(runtimeTrajectory).toMatchObject({
+      modelCallEvents: [
+        {
+          type: "model.call.started",
+          ts: "2026-07-13T10:00:00.000Z",
+          callId: "run-1:model:1",
+        },
+        {
+          type: "model.call.completed",
+          ts: "2026-07-13T10:00:01.250Z",
+          callId: "run-1:model:1",
+        },
+      ],
       steps: expect.arrayContaining([
         expect.objectContaining({
           type: "tool.call",

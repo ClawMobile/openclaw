@@ -1,0 +1,144 @@
+{
+  "id": "siliconflow",
+  "name": "SiliconFlow",
+  "description": "Adds SiliconFlow model provider support to OpenClaw.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["siliconflow"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "siliconflow-native",
+      "hosts": ["api.siliconflow.cn"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "siliconflow": {
+        "family": "siliconflow"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "siliconflow": {
+        "baseUrl": "https://api.siliconflow.cn/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "Qwen/Qwen3.6-35B-A3B",
+            "name": "Qwen 3.6 35B A3B",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": false
+            }
+          },
+          {
+            "id": "Qwen/Qwen3.6-27B",
+            "name": "Qwen 3.6 27B",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": false
+            }
+          },
+          {
+            "id": "deepseek-ai/DeepSeek-V3.2",
+            "name": "DeepSeek V3.2",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": false
+            }
+          },
+          {
+            "id": "Pro/deepseek-ai/DeepSeek-V3.2",
+            "name": "DeepSeek V3.2 Pro",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": false
+            }
+          },
+          {
+            "id": "deepseek-ai/DeepSeek-V4-Flash",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": false
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "siliconflow": "static"
+    }
+  },
+  "providerAuthEnvVars": {
+    "siliconflow": ["SILICONFLOW_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "siliconflow",
+      "method": "api-key",
+      "choiceId": "siliconflow-api-key",
+      "choiceLabel": "SiliconFlow API key",
+      "groupId": "siliconflow",
+      "groupLabel": "SiliconFlow",
+      "groupHint": "OpenAI-compatible API",
+      "optionKey": "siliconflowApiKey",
+      "cliFlag": "--siliconflow-api-key",
+      "cliOption": "--siliconflow-api-key <key>",
+      "cliDescription": "SiliconFlow API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

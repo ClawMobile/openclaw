@@ -310,6 +310,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | OpenRouter              | `openrouter`                     | `OPENROUTER_API_KEY`                                         | `openrouter/auto`                             |
 | Qianfan                 | `qianfan`                        | `QIANFAN_API_KEY`                                            | `qianfan/deepseek-v3.2`                       |
 | Qwen Cloud              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                           |
+| SiliconFlow             | `siliconflow`                    | `SILICONFLOW_API_KEY`                                        | `siliconflow/Qwen/Qwen3.6-35B-A3B`            |
 | StepFun                 | `stepfun` / `stepfun-plan`       | `STEPFUN_API_KEY`                                            | `stepfun/step-3.5-flash`                      |
 | Together                | `together`                       | `TOGETHER_API_KEY`                                           | `together/moonshotai/Kimi-K2.5`               |
 | Venice                  | `venice`                         | `VENICE_API_KEY`                                             | —                                             |

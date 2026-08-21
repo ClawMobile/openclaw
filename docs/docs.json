@@ -1375,6 +1375,7 @@
                   "providers/runway",
                   "providers/senseaudio",
                   "providers/sglang",
+                  "providers/siliconflow",
                   "providers/stepfun",
                   "providers/synthetic",
                   "providers/tencent",

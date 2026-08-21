@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.5.7
 
+### Changes
+
+- Providers: add SiliconFlow as a bundled plugin with normal interactive onboarding, a fixed OpenAI-compatible API endpoint, API-key auth, and a focused tool-capable model catalog.
+
 ### Fixes
 
 - Release/plugin publishing: retry transient ClawHub CLI dependency install failures, keep preview-passing plugins publishable when one preview cell flakes, and verify every expected ClawHub package version after publish so maintenance releases are faster to recover and less likely to hide partial plugin publishes.

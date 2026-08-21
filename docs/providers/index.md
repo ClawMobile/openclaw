@@ -66,6 +66,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Runway](/providers/runway)
 - [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
+- [SiliconFlow](/providers/siliconflow)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
 - [Tencent Cloud (TokenHub)](/providers/tencent)

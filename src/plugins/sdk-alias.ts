@@ -2,14 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
+export type PluginSdkResolutionPreference = "auto" | "dist" | "src";
 
 export type LoaderModuleResolveParams = {
   modulePath?: string;
   argv1?: string;
   cwd?: string;
   moduleUrl?: string;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
 };
 
 type PluginSdkPackageJson = {
@@ -17,24 +21,42 @@ type PluginSdkPackageJson = {
   bin?: string | Record<string, unknown>;
 };
 
+const STARTUP_ARGV1 = process.argv[1];
+const pluginSdkPackageJsonByRoot = new Map<string, PluginSdkPackageJson | null>();
+
+export function normalizeJitiAliasTargetPath(targetPath: string): string {
+  return process.platform === "win32" ? targetPath.replace(/\\/g, "/") : targetPath;
+}
+
 function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string {
   return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
 
 function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | null {
+  const cacheKey = path.resolve(packageRoot);
+  if (pluginSdkPackageJsonByRoot.has(cacheKey)) {
+    return pluginSdkPackageJsonByRoot.get(cacheKey) ?? null;
+  }
   try {
     const pkgRaw = fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8");
-    return JSON.parse(pkgRaw) as PluginSdkPackageJson;
+    const parsed = JSON.parse(pkgRaw) as PluginSdkPackageJson;
+    pluginSdkPackageJsonByRoot.set(cacheKey, parsed);
+    return parsed;
   } catch {
+    pluginSdkPackageJsonByRoot.set(cacheKey, null);
     return null;
   }
+}
+
+function isSafePluginSdkSubpathSegment(subpath: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
 }
 
 function listPluginSdkSubpathsFromPackageJson(pkg: PluginSdkPackageJson): string[] {
   return Object.keys(pkg.exports ?? {})
     .filter((key) => key.startsWith("./plugin-sdk/"))
     .map((key) => key.slice("./plugin-sdk/".length))
-    .filter((subpath) => Boolean(subpath) && !subpath.includes("/"))
+    .filter((subpath) => isSafePluginSdkSubpathSegment(subpath))
     .toSorted();
 }
 
@@ -53,7 +75,7 @@ function hasTrustedOpenClawRootIndicator(params: {
   const hasCliEntryExport = Object.prototype.hasOwnProperty.call(packageExports, "./cli-entry");
   const hasOpenClawBin =
     (typeof params.packageJson.bin === "string" &&
-      params.packageJson.bin.toLowerCase().includes("openclaw")) ||
+      normalizeLowercaseStringOrEmpty(params.packageJson.bin).includes("openclaw")) ||
     (typeof params.packageJson.bin === "object" &&
       params.packageJson.bin !== null &&
       typeof params.packageJson.bin.openclaw === "string");
@@ -71,6 +93,27 @@ function readPluginSdkSubpathsFromPackageRoot(packageRoot: string): string[] | n
   }
   const subpaths = listPluginSdkSubpathsFromPackageJson(pkg);
   return subpaths.length > 0 ? subpaths : null;
+}
+
+function resolveTrustedOpenClawRootFromArgvHint(params: {
+  argv1?: string;
+  cwd: string;
+}): string | null {
+  if (!params.argv1) {
+    return null;
+  }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    cwd: params.cwd,
+    argv1: params.argv1,
+  });
+  if (!packageRoot) {
+    return null;
+  }
+  const packageJson = readPluginSdkPackageJson(packageRoot);
+  if (!packageJson) {
+    return null;
+  }
+  return hasTrustedOpenClawRootIndicator({ packageRoot, packageJson }) ? packageRoot : null;
 }
 
 function findNearestPluginSdkPackageRoot(startDir: string, maxDepth = 12): string | null {
@@ -112,13 +155,13 @@ function resolveLoaderPluginSdkPackageRoot(
   const cwd = params.cwd ?? path.dirname(params.modulePath);
   const fromCwd = resolveOpenClawPackageRootSync({ cwd });
   const fromExplicitHints =
-    params.argv1 || params.moduleUrl
+    resolveTrustedOpenClawRootFromArgvHint({ cwd, argv1: params.argv1 }) ??
+    (params.moduleUrl
       ? resolveOpenClawPackageRootSync({
           cwd,
-          ...(params.argv1 ? { argv1: params.argv1 } : {}),
-          ...(params.moduleUrl ? { moduleUrl: params.moduleUrl } : {}),
+          moduleUrl: params.moduleUrl,
         })
-      : null;
+      : null);
   return (
     fromCwd ??
     fromExplicitHints ??
@@ -131,7 +174,14 @@ function resolveLoaderPluginSdkPackageRoot(
 export function resolvePluginSdkAliasCandidateOrder(params: {
   modulePath: string;
   isProduction: boolean;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
 }): PluginSdkAliasCandidateKind[] {
+  if (params.pluginSdkResolution === "dist") {
+    return ["dist", "src"];
+  }
+  if (params.pluginSdkResolution === "src") {
+    return ["src", "dist"];
+  }
   const normalizedModulePath = params.modulePath.replace(/\\/g, "/");
   const isDistRuntime = normalizedModulePath.includes("/dist/");
   return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
@@ -144,10 +194,12 @@ export function listPluginSdkAliasCandidates(params: {
   argv1?: string;
   cwd?: string;
   moduleUrl?: string;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
 }) {
   const orderedKinds = resolvePluginSdkAliasCandidateOrder({
     modulePath: params.modulePath,
     isProduction: process.env.NODE_ENV === "production",
+    pluginSdkResolution: params.pluginSdkResolution,
   });
   const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
   if (packageRoot) {
@@ -183,6 +235,7 @@ export function resolvePluginSdkAliasFile(params: {
   argv1?: string;
   cwd?: string;
   moduleUrl?: string;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
 }): string | null {
   try {
     const modulePath = resolveLoaderModulePath(params);
@@ -193,6 +246,7 @@ export function resolvePluginSdkAliasFile(params: {
       argv1: params.argv1,
       cwd: params.cwd,
       moduleUrl: params.moduleUrl,
+      pluginSdkResolution: params.pluginSdkResolution,
     })) {
       if (fs.existsSync(candidate)) {
         return candidate;
@@ -204,51 +258,340 @@ export function resolvePluginSdkAliasFile(params: {
   return null;
 }
 
-const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
-const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
+const MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES = 512;
+const cachedPluginSdkExportedSubpaths = new PluginLruCache<string[]>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
+const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
+const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
+const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
+  ".ts",
+  ".mts",
+  ".js",
+  ".mjs",
+  ".cts",
+  ".cjs",
+] as const;
+const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-api|.+-api)$/u;
+const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
+  /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
 
-export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
+function isUsableDistPluginSdkArtifact(candidate: string): boolean {
+  if (!fs.existsSync(candidate)) {
+    return false;
+  }
+  switch (normalizeLowercaseStringOrEmpty(path.extname(candidate))) {
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      break;
+    default:
+      return true;
+  }
+  try {
+    const source = fs.readFileSync(candidate, "utf-8");
+    for (const match of source.matchAll(JS_STATIC_RELATIVE_DEPENDENCY_PATTERN)) {
+      const specifier = match[1];
+      if (!specifier || fs.existsSync(path.resolve(path.dirname(candidate), specifier))) {
+        continue;
+      }
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
+  try {
+    const raw = fs.readFileSync(
+      path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+      "utf-8",
+    );
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath));
+  } catch {
+    return [];
+  }
+}
+
+function readBundledPluginPackageName(packageJsonPath: string): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as { name?: unknown };
+    const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
+    return name.startsWith("@openclaw/") ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+function isBundledPluginPublicSurfaceSourceBasename(params: {
+  basename: string;
+  includePrivateQa: boolean;
+}): boolean {
+  if (params.basename === "test-api") {
+    return params.includePrivateQa;
+  }
+  return BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN.test(params.basename);
+}
+
+function listBundledPluginPublicSurfaceSourceBasenames(params: {
+  extensionSourceRoot: string;
+  includePrivateQa: boolean;
+}): string[] {
+  try {
+    return fs
+      .readdirSync(params.extensionSourceRoot, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .flatMap((fileName) => {
+        const ext = PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.find((candidateExt) =>
+          fileName.endsWith(candidateExt),
+        );
+        if (!ext) {
+          return [];
+        }
+        const basename = fileName.slice(0, -ext.length);
+        return isBundledPluginPublicSurfaceSourceBasename({
+          basename,
+          includePrivateQa: params.includePrivateQa,
+        })
+          ? [basename]
+          : [];
+      })
+      .toSorted();
+  } catch {
+    return [];
+  }
+}
+
+function resolveBundledPluginPublicSurfaceAliasTarget(params: {
+  packageRoot: string;
+  dirName: string;
+  basename: string;
+  orderedKinds: PluginSdkAliasCandidateKind[];
+}): string | null {
+  for (const kind of params.orderedKinds) {
+    if (kind === "dist") {
+      const candidate = path.join(
+        params.packageRoot,
+        "dist",
+        "extensions",
+        params.dirName,
+        `${params.basename}.js`,
+      );
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+      continue;
+    }
+    for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+      const candidate = path.join(
+        params.packageRoot,
+        "extensions",
+        params.dirName,
+        `${params.basename}${ext}`,
+      );
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl?: string;
+  pluginSdkResolution: PluginSdkResolutionPreference;
+}): Record<string, string> {
+  const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
+  if (!packageRoot) {
+    return {};
+  }
+  const extensionsRoot = path.join(packageRoot, "extensions");
+  let extensionDirs: fs.Dirent[];
+  try {
+    extensionDirs = fs.readdirSync(extensionsRoot, { withFileTypes: true });
+  } catch {
+    return {};
+  }
+  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+    modulePath: params.modulePath,
+    isProduction: process.env.NODE_ENV === "production",
+    pluginSdkResolution: params.pluginSdkResolution,
+  });
+  const includePrivateQa = shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  const aliasMap: Record<string, string> = {};
+  for (const entry of extensionDirs) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const dirName = entry.name;
+    const packageName = readBundledPluginPackageName(
+      path.join(extensionsRoot, dirName, "package.json"),
+    );
+    if (!packageName) {
+      continue;
+    }
+    for (const basename of listBundledPluginPublicSurfaceSourceBasenames({
+      extensionSourceRoot: path.join(extensionsRoot, dirName),
+      includePrivateQa,
+    })) {
+      const target = resolveBundledPluginPublicSurfaceAliasTarget({
+        packageRoot,
+        dirName,
+        basename,
+        orderedKinds,
+      });
+      if (!target) {
+        continue;
+      }
+      aliasMap[`${packageName}/${basename}.js`] = normalizeJitiAliasTargetPath(target);
+    }
+  }
+  return aliasMap;
+}
+
+function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
+  return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
+}
+
+function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
+  const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+  if (isUsableDistPluginSdkArtifact(distPath)) {
+    return true;
+  }
+  return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
+    fs.existsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
+  );
+}
+
+function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
+  try {
+    const distPluginSdkDir = path.join(packageRoot, "dist", "plugin-sdk");
+    return new Set(
+      fs
+        .readdirSync(distPluginSdkDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+        .map((entry) => entry.name.slice(0, -".js".length))
+        .filter((subpath) => isSafePluginSdkSubpathSegment(subpath)),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function listPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
+  if (!shouldIncludePrivateLocalOnlyPluginSdkSubpaths()) {
+    return [];
+  }
+  return readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter((subpath) =>
+    hasPluginSdkSubpathArtifact(packageRoot, subpath),
+  );
+}
+
+export function listPluginSdkExportedSubpaths(
+  params: {
+    modulePath?: string;
+    argv1?: string;
+    moduleUrl?: string;
+    pluginSdkResolution?: PluginSdkResolutionPreference;
+  } = {},
+): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({
+    modulePath,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+  });
   if (!packageRoot) {
     return [];
   }
-  const cached = cachedPluginSdkExportedSubpaths.get(packageRoot);
+  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
+  const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const subpaths = readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? [];
-  cachedPluginSdkExportedSubpaths.set(packageRoot, subpaths);
+  const subpaths = [
+    ...new Set([
+      ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
+      ...listPrivateLocalOnlyPluginSdkSubpaths(packageRoot),
+    ]),
+  ].toSorted();
+  cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
   return subpaths;
 }
 
 export function resolvePluginSdkScopedAliasMap(
-  params: { modulePath?: string } = {},
+  params: {
+    modulePath?: string;
+    argv1?: string;
+    moduleUrl?: string;
+    pluginSdkResolution?: PluginSdkResolutionPreference;
+  } = {},
 ): Record<string, string> {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({
+    modulePath,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+  });
   if (!packageRoot) {
     return {};
   }
   const orderedKinds = resolvePluginSdkAliasCandidateOrder({
     modulePath,
     isProduction: process.env.NODE_ENV === "production",
+    pluginSdkResolution: params.pluginSdkResolution,
   });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;
   }
   const aliasMap: Record<string, string> = {};
-  for (const subpath of listPluginSdkExportedSubpaths({ modulePath })) {
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "plugin-sdk", `${subpath}.ts`),
-      dist: path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`),
-    } as const;
+  const distPluginSdkArtifacts = orderedKinds.includes("dist")
+    ? listDistPluginSdkArtifactSubpaths(packageRoot)
+    : new Set<string>();
+  for (const subpath of listPluginSdkExportedSubpaths({
+    modulePath,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+    pluginSdkResolution: params.pluginSdkResolution,
+  })) {
     for (const kind of orderedKinds) {
-      const candidate = candidateMap[kind];
-      if (fs.existsSync(candidate)) {
-        aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+      if (kind === "dist") {
+        if (!distPluginSdkArtifacts.has(subpath)) {
+          continue;
+        }
+        const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+        if (isUsableDistPluginSdkArtifact(candidate)) {
+          for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+            aliasMap[`${packageName}/${subpath}`] = candidate;
+          }
+          break;
+        }
+        continue;
+      }
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
+        if (!fs.existsSync(candidate)) {
+          continue;
+        }
+        for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+          aliasMap[`${packageName}/${subpath}`] = candidate;
+        }
+        break;
+      }
+      if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
         break;
       }
     }
@@ -268,15 +611,21 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
     const orderedKinds = resolvePluginSdkAliasCandidateOrder({
       modulePath,
       isProduction: process.env.NODE_ENV === "production",
+      pluginSdkResolution: params.pluginSdkResolution,
     });
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "extensionAPI.ts"),
-      dist: path.join(packageRoot, "dist", "extensionAPI.js"),
-    } as const;
     for (const kind of orderedKinds) {
-      const candidate = candidateMap[kind];
-      if (fs.existsSync(candidate)) {
-        return candidate;
+      if (kind === "dist") {
+        const candidate = path.join(packageRoot, "dist", "extensionAPI.js");
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+        continue;
+      }
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(packageRoot, "src", `extensionAPI${ext}`);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
       }
     }
   } catch {
@@ -285,18 +634,160 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
-export function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
+const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
+const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
+
+// Memoize loader alias/config by effective resolution context so repeated
+// loader setup avoids rebuilding the same filesystem-derived map and cache key.
+// Include cwd/env inputs because the fallback root and private QA alias
+// surfaces depend on them.
+const aliasMapCache = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
+const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
+const pluginLoaderModuleConfigCache = new PluginLruCache<{
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+  cacheKey: string;
+}>(MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES);
+
+function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
+  return Boolean((aliasMap as Record<symbol, unknown>)[JITI_NORMALIZED_ALIAS_SYMBOL]);
+}
+
+function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
+  return JSON.stringify(
+    Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function normalizePluginLoaderAliasMapForJiti(
+  aliasMap: Record<string, string>,
+): Record<string, string> {
+  if (hasJitiNormalizedAliasMarker(aliasMap)) {
+    return aliasMap;
+  }
+  const cacheKey = createJitiAliasContentCacheKey(aliasMap);
+  const cached = normalizedJitiAliasMapCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const normalizedAliasMap = Object.fromEntries(
+    Object.entries(aliasMap).toSorted(
+      ([left], [right]) => right.split("/").length - left.split("/").length,
+    ),
+  );
+  for (const aliasKey in normalizedAliasMap) {
+    for (const candidateKey in normalizedAliasMap) {
+      if (
+        candidateKey === aliasKey ||
+        aliasKey.startsWith(candidateKey) ||
+        !normalizedAliasMap[aliasKey]?.startsWith(candidateKey) ||
+        !JITI_ALIAS_ROOT_SENTINELS.has(normalizedAliasMap[aliasKey]?.[candidateKey.length])
+      ) {
+        continue;
+      }
+      normalizedAliasMap[aliasKey] =
+        normalizedAliasMap[candidateKey] + normalizedAliasMap[aliasKey].slice(candidateKey.length);
+    }
+  }
+  Object.defineProperty(normalizedAliasMap, JITI_NORMALIZED_ALIAS_SYMBOL, {
+    value: true,
+    enumerable: false,
+  });
+  normalizedJitiAliasMapCache.set(cacheKey, normalizedAliasMap);
+  return normalizedAliasMap;
+}
+
+function buildPluginLoaderAliasMapCacheKey(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl?: string;
+  pluginSdkResolution: PluginSdkResolutionPreference;
+}) {
+  return [
+    params.modulePath,
+    params.argv1 ?? "",
+    params.moduleUrl ?? "",
+    params.pluginSdkResolution,
+    process.cwd(),
+    process.env.NODE_ENV === "production" ? "production" : "non-production",
+    shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "private-qa" : "public",
+  ].join("\0");
+}
+
+function buildPluginLoaderModuleConfigCacheKey(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl: string;
+  preferBuiltDist?: boolean;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+}) {
+  return [
+    buildPluginLoaderAliasMapCacheKey({
+      modulePath: params.modulePath,
+      argv1: params.argv1,
+      moduleUrl: params.moduleUrl,
+      pluginSdkResolution: params.pluginSdkResolution ?? "auto",
+    }),
+    params.preferBuiltDist === true ? "prefer-built-dist" : "default-dist",
+  ].join("\0");
+}
+
+export function buildPluginLoaderAliasMap(
+  modulePath: string,
+  argv1: string | undefined = STARTUP_ARGV1,
+  moduleUrl?: string,
+  pluginSdkResolution: PluginSdkResolutionPreference = "auto",
+): Record<string, string> {
+  const cacheKey = buildPluginLoaderAliasMapCacheKey({
+    modulePath,
+    argv1,
+    moduleUrl,
+    pluginSdkResolution,
+  });
+  const cached = aliasMapCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const pluginSdkAlias = resolvePluginSdkAliasFile({
     srcFile: "root-alias.cjs",
     distFile: "root-alias.cjs",
     modulePath,
+    argv1,
+    moduleUrl,
+    pluginSdkResolution,
   });
-  const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
-  return {
-    ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
-    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+  const extensionApiAlias = resolveExtensionApiAlias({ modulePath, pluginSdkResolution });
+  const result: Record<string, string> = {
+    ...(extensionApiAlias
+      ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
+      : {}),
+    ...resolveBundledPluginPackagePublicSurfaceAliasMap({
+      modulePath,
+      argv1,
+      moduleUrl,
+      pluginSdkResolution,
+    }),
+    ...(pluginSdkAlias
+      ? Object.fromEntries(
+          PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [
+            packageName,
+            normalizeJitiAliasTargetPath(pluginSdkAlias),
+          ]),
+        )
+      : {}),
+    ...Object.fromEntries(
+      Object.entries(
+        resolvePluginSdkScopedAliasMap({ modulePath, argv1, moduleUrl, pluginSdkResolution }),
+      ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
+    ),
   };
+  aliasMapCache.set(cacheKey, result);
+  return result;
 }
 
 export function resolvePluginRuntimeModulePath(
@@ -307,6 +798,7 @@ export function resolvePluginRuntimeModulePath(
     const orderedKinds = resolvePluginSdkAliasCandidateOrder({
       modulePath,
       isProduction: process.env.NODE_ENV === "production",
+      pluginSdkResolution: params.pluginSdkResolution,
     });
     const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
     const candidates = packageRoot
@@ -331,22 +823,36 @@ export function resolvePluginRuntimeModulePath(
 }
 
 export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
+  const hasAliases = Object.keys(aliasMap).length > 0;
+  const jitiAliasMap = hasAliases ? normalizePluginLoaderAliasMapForJiti(aliasMap) : aliasMap;
   return {
     interopDefault: true,
     // Prefer Node's native sync ESM loader for built dist/*.js modules so
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-    ...(Object.keys(aliasMap).length > 0
+    ...(hasAliases
       ? {
-          alias: aliasMap,
+          alias: jitiAliasMap,
         }
       : {}),
   };
 }
 
-export function shouldPreferNativeJiti(modulePath: string): boolean {
-  switch (path.extname(modulePath).toLowerCase()) {
+function supportsNativeModuleRuntime(): boolean {
+  const versions = process.versions as { bun?: string };
+  return typeof versions.bun !== "string";
+}
+
+function isBundledPluginDistModulePath(modulePath: string): boolean {
+  return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
+}
+
+export function shouldPreferNativeModuleLoad(modulePath: string): boolean {
+  if (!supportsNativeModuleRuntime()) {
+    return false;
+  }
+  switch (normalizeLowercaseStringOrEmpty(path.extname(modulePath))) {
     case ".js":
     case ".mjs":
     case ".cjs":
@@ -355,4 +861,90 @@ export function shouldPreferNativeJiti(modulePath: string): boolean {
     default:
       return false;
   }
+}
+
+export function resolvePluginLoaderTryNative(
+  modulePath: string,
+  options?: {
+    preferBuiltDist?: boolean;
+  },
+): boolean {
+  if (isBundledPluginDistModulePath(modulePath)) {
+    return shouldPreferNativeModuleLoad(modulePath);
+  }
+  return (
+    shouldPreferNativeModuleLoad(modulePath) ||
+    (supportsNativeModuleRuntime() &&
+      options?.preferBuiltDist === true &&
+      modulePath.includes(`${path.sep}dist${path.sep}`))
+  );
+}
+
+export function createPluginLoaderModuleCacheKey(params: {
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+}): string {
+  return JSON.stringify({
+    tryNative: params.tryNative,
+    aliasMap: Object.entries(params.aliasMap).toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+  });
+}
+
+export function resolvePluginLoaderModuleConfig(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl: string;
+  preferBuiltDist?: boolean;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+}): {
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+  cacheKey: string;
+} {
+  const configCacheKey = buildPluginLoaderModuleConfigCacheKey(params);
+  const cached = pluginLoaderModuleConfigCache.get(configCacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const tryNative = resolvePluginLoaderTryNative(
+    params.modulePath,
+    params.preferBuiltDist ? { preferBuiltDist: true } : {},
+  );
+  const aliasMap = buildPluginLoaderAliasMap(
+    params.modulePath,
+    params.argv1,
+    params.moduleUrl,
+    params.pluginSdkResolution,
+  );
+  const result = {
+    tryNative,
+    aliasMap,
+    cacheKey: createPluginLoaderModuleCacheKey({
+      tryNative,
+      aliasMap,
+    }),
+  };
+  pluginLoaderModuleConfigCache.set(configCacheKey, result);
+  return result;
+}
+
+export function isBundledPluginExtensionPath(params: {
+  modulePath: string;
+  openClawPackageRoot: string;
+  bundledPluginsDir?: string;
+}): boolean {
+  const normalizedModulePath = path.resolve(params.modulePath);
+  const roots = [
+    params.bundledPluginsDir ? path.resolve(params.bundledPluginsDir) : null,
+    path.join(params.openClawPackageRoot, "extensions"),
+    path.join(params.openClawPackageRoot, "dist", "extensions"),
+    path.join(params.openClawPackageRoot, "dist-runtime", "extensions"),
+  ].filter((root): root is string => typeof root === "string");
+  return roots.some(
+    (root) =>
+      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
+  );
 }

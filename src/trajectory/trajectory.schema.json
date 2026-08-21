@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clawmobile.ae/schemas/trajectory.schema.json",
+  "title": "ClawMobile Benchmark Trajectory",
+  "description": "Version that retains observation + context. Two content-addressed stores: messages (individual messages) and observations (device snapshots). Each turn uses input.context (an ordered list of msg_ids) to indicate the messages the model saw, output_ref to point to this turn's assistant message, and execution to record per-call execution grounding. Function 1 reads only rollups + outcome + task_id; observation/context/grounding are kept for functions 2/3/4 so this data is reusable without re-running on a real device. Removed redundant fields: stop_reason, model_latency_ms, turn_id, ts_start, input.observation_ref, and execution's pre/post_obs_ref and screen_changed (all derivable from context/result). When building function 2, add app.version back.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "trajectory_id",
+    "task_id",
+    "agent",
+    "messages",
+    "observations",
+    "turns",
+    "outcome",
+    "rollups"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string" },
+    "trajectory_id": { "type": "string" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "user_id": {
+      "type": "string",
+      "description": "Stable user id. Function 3 relies on it to aggregate across trajectories and identify durable preferences."
+    },
+
+    "task_id": {
+      "type": "string",
+      "description": "Stable key of the task template. Shared across multiple runs of the same task — the prerequisite for computing completion rate per task."
+    },
+    "instruction": { "type": "string" },
+    "parsed_params": {
+      "type": "array",
+      "description": "Instantiated task-template slots. action.input_source_param points to a name here; used by function 2 for parameterization and by function 3 to distinguish task-specific values from durable preferences.",
+      "items": {
+        "type": "object",
+        "required": ["name", "value"],
+        "properties": { "name": { "type": "string" }, "value": {}, "type": { "type": "string" } }
+      }
+    },
+
+    "agent": {
+      "type": "object",
+      "description": "The agent under evaluation. The system_prompt goes into messages as a system message and is referenced by each turn's context.",
+      "required": ["model"],
+      "additionalProperties": false,
+      "properties": {
+        "framework": { "type": "string" },
+        "framework_version": { "type": "string" },
+        "model": { "type": "string", "description": "Used for token-to-cost conversion." },
+        "model_version": { "type": "string" },
+        "config": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "temperature": { "type": "number" },
+            "tool_schema": {
+              "description": "Tool definitions (an API-level parameter, not a message); stored once per trajectory."
+            }
+          }
+        }
+      }
+    },
+
+    "messages": {
+      "type": "object",
+      "description": "Content-addressed message dictionary (the carrier of context): one system message, each user message, each turn's assistant output, and each tool result — one entry each, deduplicated via references from each turn's context. Messages that involve a screen use obs_ref to point to observations.",
+      "additionalProperties": { "$ref": "#/$defs/message" }
+    },
+
+    "observations": {
+      "type": "object",
+      "description": "Content-addressed observation dictionary: screenshot + UIAutomator XML + foreground app. Two identical obs_refs mean the screen did not change (feeds function 4); function 2 uses the XML for grounding.",
+      "additionalProperties": { "$ref": "#/$defs/observation" }
+    },
+
+    "turns": {
+      "type": "array",
+      "description": "Thin records in inference order. Function 1 uses them to count steps and aggregate tokens.",
+      "items": { "$ref": "#/$defs/turn" }
+    },
+
+    "outcome": {
+      "type": "object",
+      "description": "Source of the completion rate. success is provided by the external checker, not self-reported by the agent.",
+      "required": ["success", "termination_reason"],
+      "additionalProperties": false,
+      "properties": {
+        "success": { "type": "boolean" },
+        "termination_reason": {
+          "type": "string",
+          "enum": ["success", "max_steps", "crash", "refused", "error", "user_abort"]
+        },
+        "checker_output": {
+          "type": "object",
+          "properties": {
+            "passed_subconditions": { "type": "array", "items": { "type": "string" } },
+            "failed_subconditions": { "type": "array", "items": { "type": "string" } },
+            "evidence": {}
+          }
+        }
+      }
+    },
+
+    "rollups": {
+      "type": "object",
+      "description": "Function 1's main read surface; all values are recomputable from turns.",
+      "required": ["total_turns", "total_actions", "total_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "total_turns": { "type": "integer" },
+        "total_actions": { "type": "integer" },
+        "total_errors": { "type": "integer" },
+        "total_tokens": {
+          "type": "object",
+          "required": ["input", "output"],
+          "properties": { "input": { "type": "integer" }, "output": { "type": "integer" } }
+        },
+        "total_cost_usd": { "type": "number" },
+        "total_duration_ms": { "type": "integer" }
+      }
+    },
+
+    "annotations": {
+      "type": "object",
+      "description": "Trajectory-level offline-derived layer placeholder (left empty at collection time).",
+      "additionalProperties": true
+    }
+  },
+
+  "$defs": {
+    "message": {
+      "type": "object",
+      "description": "A single message. system/user/tool use text; assistant uses thought/tool_calls/assistant_text. Messages that involve a screen use obs_ref to point to observations.",
+      "required": ["role"],
+      "additionalProperties": false,
+      "properties": {
+        "role": { "type": "string", "enum": ["system", "user", "assistant", "tool"] },
+        "text": { "type": "string" },
+        "obs_ref": { "type": "string" },
+        "tool_call_id": {
+          "type": "string",
+          "description": "For a tool message, which tool call it responds to."
+        },
+        "thought": { "type": "string" },
+        "tool_calls": { "type": "array", "items": { "$ref": "#/$defs/tool_call" } },
+        "assistant_text": { "type": "string" }
+      }
+    },
+
+    "observation": {
+      "type": "object",
+      "required": ["obs_ref"],
+      "additionalProperties": false,
+      "properties": {
+        "obs_ref": { "type": "string" },
+        "captured_at": { "type": "string", "format": "date-time" },
+        "trigger": { "type": "string", "enum": ["tool_call", "auto_pre", "auto_post", "periodic"] },
+        "screenshot_path": {
+          "type": "string",
+          "description": "On-disk screenshot path (can be omitted for XML-only / non-vision agents)."
+        },
+        "ui_xml_path": {
+          "type": "string",
+          "description": "Path to the UIAutomator XML / a11y tree. Function 2 grounding relies on it."
+        },
+        "foreground": {
+          "type": "object",
+          "description": "The current foreground app (package info is kept here).",
+          "properties": { "package": { "type": "string" }, "activity": { "type": "string" } }
+        },
+        "device_state": { "type": "object", "additionalProperties": true }
+      }
+    },
+
+    "tool_call": {
+      "type": "object",
+      "required": ["tool_call_id", "name", "arguments"],
+      "additionalProperties": false,
+      "properties": {
+        "tool_call_id": { "type": "string" },
+        "name": { "type": "string" },
+        "arguments": {}
+      }
+    },
+
+    "action": {
+      "type": "object",
+      "description": "Execution grounding of a UI action (function 2 replays it, function 3 extracts semantic values). If the runtime returns text only, record this structure out-of-band in the mobile-ui plugin.",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "tap",
+            "long_press",
+            "swipe",
+            "type",
+            "key",
+            "scroll",
+            "open_app",
+            "back",
+            "home",
+            "wait",
+            "shell"
+          ]
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "resource_id": { "type": "string" },
+            "bounds": { "type": "string" },
+            "text": { "type": "string" },
+            "class": { "type": "string" }
+          }
+        },
+        "coord": {
+          "type": "object",
+          "description": "px + normalized. Cross-resolution replay relies on normalized, so compute it at collection time.",
+          "properties": {
+            "px": {
+              "type": "object",
+              "properties": { "x": { "type": "number" }, "y": { "type": "number" } }
+            },
+            "normalized": {
+              "type": "object",
+              "properties": { "x": { "type": "number" }, "y": { "type": "number" } }
+            }
+          }
+        },
+        "input_value": {
+          "type": "string",
+          "description": "Text typed / value selected by a type action. Function 3 mines personalization info from here."
+        },
+        "input_source_param": {
+          "type": "string",
+          "description": "If the value comes from a task parameter slot, put its name here (pointing to parsed_params)."
+        },
+        "raw_command": {
+          "type": "string",
+          "description": "The literal issued command, kept for exact replay."
+        }
+      }
+    },
+
+    "execution": {
+      "type": "object",
+      "description": "Execution record of one tool_call. The result text the model saw is in messages[result_ref]; the pre-action observation is the obs_ref of the last message in this turn's context, and the post-action observation is the obs_ref of the result message, so pre/post_obs_ref are no longer listed separately.",
+      "required": ["tool_call_id", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "tool_call_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["ok", "error"] },
+        "error": { "type": "string" },
+        "retry_of": { "type": "string" },
+        "latency_ms": { "type": "integer" },
+        "result_ref": {
+          "type": "string",
+          "description": "Points to the tool message in messages that carried the result back into context."
+        },
+        "action": {
+          "$ref": "#/$defs/action",
+          "description": "Present only when the call is a UI action."
+        }
+      }
+    },
+
+    "env_event": {
+      "type": "object",
+      "description": "An environment event with no model trigger that fell within this turn's window. Attached to the corresponding turn to preserve global ordering.",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["notification", "dialog", "crash", "toast", "unprompted_change"]
+        },
+        "ts": { "type": "string", "format": "date-time" },
+        "detail": {}
+      }
+    },
+
+    "turn": {
+      "type": "object",
+      "required": ["turn_index", "input", "output_ref", "token_usage"],
+      "additionalProperties": false,
+      "properties": {
+        "turn_index": {
+          "type": "integer",
+          "description": "Global monotonic index; also a stable handle."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "description": "Total wall-clock time of this turn (including execution)."
+        },
+        "input": {
+          "type": "object",
+          "required": ["context"],
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "type": "array",
+              "description": "Ordered list of msg_ids = the messages the model saw this turn. The full context is reconstructed directly from this.",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "output_ref": {
+          "type": "string",
+          "description": "Id of the assistant message produced this turn (it appears in the context of later turns)."
+        },
+        "execution": {
+          "type": "array",
+          "description": "Execution record for each tool_call of this turn.",
+          "items": { "$ref": "#/$defs/execution" }
+        },
+        "env_events": { "type": "array", "items": { "$ref": "#/$defs/env_event" } },
+        "token_usage": {
+          "type": "object",
+          "description": "Token bill for this turn's single inference. Source for function 1's cost.",
+          "required": ["input", "output"],
+          "properties": {
+            "input": { "type": "integer" },
+            "output": { "type": "integer" },
+            "cached": { "type": "integer" }
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "This turn's offline-derived layer placeholder (left empty at collection time)."
+        }
+      }
+    }
+  }
+}

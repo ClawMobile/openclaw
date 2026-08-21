@@ -1,4 +1,4 @@
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 
 const benchmarkLogger = createSubsystemLogger("gateway/channels/telegram/benchmark");
 

@@ -1,8 +1,9 @@
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import type { Bot } from "grammy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import { sendMessageTelegram } from "./send.js";
 
@@ -22,6 +23,12 @@ type TelegramBenchmarkNoticeParams = TaskKeyParams & {
 const taskStartTimes = new Map<string, number>();
 const MAX_TRACKED_TASKS = 512;
 const SCREENSHOT_TIMEOUT_MS = 30_000;
+const TELEGRAM_BENCHMARK_NOTICES_ENV = "OPENCLAW_TELEGRAM_BENCHMARK_NOTICES";
+
+function areTelegramBenchmarkNoticesEnabled(): boolean {
+  const raw = process.env[TELEGRAM_BENCHMARK_NOTICES_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
 
 function buildTaskKey(params: TaskKeyParams): string {
   return `${params.chatId}:${params.messageId}:${params.threadId ?? "root"}`;
@@ -71,7 +78,7 @@ function adbCommandArgs(args: string[]): string[] {
 function benchmarkScreenshotPath(): string {
   const dir = resolvePreferredOpenClawTmpDir();
   fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `telegram-benchmark-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`);
+  return path.join(dir, `telegram-benchmark-${Date.now()}-${randomUUID()}.png`);
 }
 
 function normalizePngBuffer(buffer: Buffer): Buffer {
@@ -91,10 +98,10 @@ function pngDimensions(buffer: Buffer): { width: number; height: number } {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
-async function runAdbScreenshotAttempt(args: string[], normalizeLineEndings: boolean): Promise<
-  | { ok: true; path: string }
-  | { ok: false; error: string }
-> {
+async function runAdbScreenshotAttempt(
+  args: string[],
+  normalizeLineEndings: boolean,
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   return await new Promise((resolve) => {
     const child = spawn("adb", args, {
       env: process.env,
@@ -181,6 +188,9 @@ async function captureAdbScreenshot(): Promise<
 export async function announceTelegramTaskStarted(params: TelegramBenchmarkNoticeParams) {
   taskStartTimes.set(buildTaskKey(params), Date.now());
   pruneTrackedTasks();
+  if (!areTelegramBenchmarkNoticesEnabled()) {
+    return;
+  }
   await sendBenchmarkText(params, "[benchmark] inbound_received\nTask started");
 }
 
@@ -188,6 +198,10 @@ export async function announceTelegramTaskCompleted(params: TelegramBenchmarkNot
   const taskKey = buildTaskKey(params);
   const startedAtMs = taskStartTimes.get(taskKey);
   taskStartTimes.delete(taskKey);
+
+  if (!areTelegramBenchmarkNoticesEnabled()) {
+    return;
+  }
 
   await sendBenchmarkText(params, "[benchmark] reply_delivered\nTask completed");
 
@@ -205,15 +219,19 @@ export async function announceTelegramTaskCompleted(params: TelegramBenchmarkNot
   }
 
   try {
-    await sendMessageTelegram(String(params.chatId), "[benchmark] Screenshot after task completion", {
-      cfg: params.cfg,
-      token: params.token,
-      accountId: params.accountId,
-      api: params.api,
-      messageThreadId: params.threadId,
-      replyToMessageId: params.messageId,
-      mediaUrl: screenshot.path,
-    });
+    await sendMessageTelegram(
+      String(params.chatId),
+      "[benchmark] Screenshot after task completion",
+      {
+        cfg: params.cfg,
+        token: params.token,
+        accountId: params.accountId,
+        api: params.api,
+        messageThreadId: params.threadId,
+        replyToMessageId: params.messageId,
+        mediaUrl: screenshot.path,
+      },
+    );
   } finally {
     try {
       fs.unlinkSync(screenshot.path);

@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
-import { shouldBuildBundledCluster } from "./scripts/lib/optional-bundled-clusters.mjs";
+import {
+  collectBundledPluginBuildEntries,
+  collectRootPackageExcludedExtensionDirs,
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+} from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -20,6 +24,34 @@ type InputOptionsReturn = InputOptionsFactory extends (
   ? Return
   : never;
 type OnLogFunction = InputOptionsArg extends { onLog?: infer OnLog } ? NonNullable<OnLog> : never;
+type OutputOptionsFactory = Extract<NonNullable<UserConfig["outputOptions"]>, Function>;
+type OutputOptionsArg = OutputOptionsFactory extends (
+  options: infer Options,
+  format: infer _Format,
+  context: infer _Context,
+) => infer _Return
+  ? Options
+  : never;
+type OutputOptionsReturn = OutputOptionsFactory extends (
+  options: infer _Options,
+  format: infer _Format,
+  context: infer _Context,
+) => infer Return
+  ? Return
+  : never;
+type EntryFileNamesFunction = OutputOptionsArg extends { entryFileNames?: infer EntryFileNames }
+  ? Extract<NonNullable<EntryFileNames>, Function>
+  : never;
+type ChunkFileNamesFunction = OutputOptionsArg extends { chunkFileNames?: infer ChunkFileNames }
+  ? Extract<NonNullable<ChunkFileNames>, Function>
+  : never;
+type ChunkFileNameFunction = EntryFileNamesFunction | ChunkFileNamesFunction;
+type ChunkInfo = Parameters<ChunkFileNameFunction>[0];
+type ExternalOptionFunction = (
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+) => boolean | null | undefined;
 
 const env = {
   NODE_ENV: "production",
@@ -31,12 +63,41 @@ const SUPPRESSED_EVAL_WARNING_PATHS = [
   "bottleneck/lib/RedisConnection.js",
 ] as const;
 
+function normalizedLogHaystack(log: { message?: string; id?: string; importer?: string }): string {
+  return [log.message, log.id, log.importer].filter(Boolean).join("\n").replaceAll("\\", "/");
+}
+
+function matchesExternalOption(
+  option: unknown,
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+): boolean {
+  if (!option) {
+    return false;
+  }
+  if (typeof option === "function") {
+    return (option as ExternalOptionFunction)(id, parentId, isResolved) === true;
+  }
+  if (typeof option === "string") {
+    return option === id;
+  }
+  if (option instanceof RegExp) {
+    return option.test(id);
+  }
+  if (Array.isArray(option)) {
+    return option.some((entry) => matchesExternalOption(entry, id, parentId, isResolved));
+  }
+  return false;
+}
+
 function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
 
   const previousOnLog = typeof options.onLog === "function" ? options.onLog : undefined;
+  const previousExternal = (options as { external?: unknown }).external;
 
   function isSuppressedLog(log: {
     code?: string;
@@ -47,15 +108,24 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
     if (log.code === "PLUGIN_TIMINGS") {
       return true;
     }
+    if (log.code === "UNRESOLVED_IMPORT") {
+      return normalizedLogHaystack(log).includes("extensions/");
+    }
     if (log.code !== "EVAL") {
       return false;
     }
-    const haystack = [log.message, log.id, log.importer].filter(Boolean).join("\n");
+    const haystack = normalizedLogHaystack(log);
     return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
   }
 
   return {
     ...options,
+    external(id: string, parentId: string | undefined, isResolved: boolean) {
+      return (
+        shouldNeverBundleDependency(id) ||
+        matchesExternalOption(previousExternal, id, parentId, isResolved)
+      );
+    },
     onLog(...args: Parameters<OnLogFunction>) {
       const [level, log, defaultHandler] = args;
       if (isSuppressedLog(log)) {
@@ -70,6 +140,76 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   };
 }
 
+const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
+
+function normalizeModuleId(moduleId: string): string {
+  return moduleId.replaceAll("\\", "/");
+}
+
+function resolveExternalizedBundledPluginChunkId(chunkInfo: ChunkInfo): string | null {
+  let pluginId: string | null = null;
+  const moduleIds = [
+    ...(chunkInfo.facadeModuleId ? [chunkInfo.facadeModuleId] : []),
+    ...(chunkInfo.moduleIds ?? []),
+  ];
+  for (const moduleId of moduleIds) {
+    const normalized = normalizeModuleId(moduleId);
+    const match = /(?:^|\/)extensions\/([^/]+)\//u.exec(normalized);
+    if (!match?.[1]) {
+      continue;
+    }
+    if (!rootPackageExcludedExtensionDirs.has(match[1])) {
+      return null;
+    }
+    if (pluginId && pluginId !== match[1]) {
+      return null;
+    }
+    pluginId = match[1];
+  }
+  return pluginId;
+}
+
+function externalizedBundledPluginFileNamePattern(
+  pluginId: string,
+  chunkInfo: ChunkInfo,
+  fallback: string,
+): string {
+  return chunkInfo.name?.startsWith(`extensions/${pluginId}/`)
+    ? fallback
+    : `extensions/${pluginId}/${fallback}`;
+}
+
+function buildOutputOptions(options: OutputOptionsArg): OutputOptionsReturn {
+  const previousEntryFileNames = options.entryFileNames;
+  const previousChunkFileNames = options.chunkFileNames;
+
+  return {
+    ...options,
+    entryFileNames(chunkInfo: ChunkInfo) {
+      const fallback =
+        typeof previousEntryFileNames === "function"
+          ? previousEntryFileNames(chunkInfo)
+          : (previousEntryFileNames ?? "[name].js");
+      const externalizedPluginId = resolveExternalizedBundledPluginChunkId(chunkInfo);
+      if (externalizedPluginId) {
+        return externalizedBundledPluginFileNamePattern(externalizedPluginId, chunkInfo, fallback);
+      }
+      return fallback;
+    },
+    chunkFileNames(chunkInfo: ChunkInfo) {
+      const fallback =
+        typeof previousChunkFileNames === "function"
+          ? previousChunkFileNames(chunkInfo)
+          : (previousChunkFileNames ?? "[name]-[hash].js");
+      const externalizedPluginId = resolveExternalizedBundledPluginChunkId(chunkInfo);
+      if (externalizedPluginId) {
+        return externalizedBundledPluginFileNamePattern(externalizedPluginId, chunkInfo, fallback);
+      }
+      return fallback;
+    },
+  };
+}
+
 function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
@@ -77,64 +217,12 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
     fixedExtension: false,
     platform: "node",
     inputOptions: buildInputOptions,
+    outputOptions: buildOutputOptions,
   };
 }
 
-function listBundledPluginBuildEntries(): Record<string, string> {
-  const extensionsRoot = path.join(process.cwd(), "extensions");
-  const entries: Record<string, string> = {};
-
-  for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!dirent.isDirectory()) {
-      continue;
-    }
-    if (!shouldBuildBundledCluster(dirent.name, process.env)) {
-      continue;
-    }
-
-    const pluginDir = path.join(extensionsRoot, dirent.name);
-    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
-      continue;
-    }
-
-    const packageJsonPath = path.join(pluginDir, "package.json");
-    let packageEntries: string[] = [];
-    if (fs.existsSync(packageJsonPath)) {
-      try {
-        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-          openclaw?: { extensions?: unknown; setupEntry?: unknown };
-        };
-        packageEntries = Array.isArray(packageJson.openclaw?.extensions)
-          ? packageJson.openclaw.extensions.filter(
-              (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-            )
-          : [];
-        const setupEntry =
-          typeof packageJson.openclaw?.setupEntry === "string" &&
-          packageJson.openclaw.setupEntry.trim().length > 0
-            ? packageJson.openclaw.setupEntry
-            : undefined;
-        if (setupEntry) {
-          packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
-        }
-      } catch {
-        packageEntries = [];
-      }
-    }
-
-    const sourceEntries = packageEntries.length > 0 ? packageEntries : ["./index.ts"];
-    for (const entry of sourceEntries) {
-      const normalizedEntry = entry.replace(/^\.\//, "");
-      const entryKey = `extensions/${dirent.name}/${normalizedEntry.replace(/\.[^.]+$/u, "")}`;
-      entries[entryKey] = path.join("extensions", dirent.name, normalizedEntry);
-    }
-  }
-
-  return entries;
-}
-
-const bundledPluginBuildEntries = listBundledPluginBuildEntries();
+const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
+const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -162,6 +250,42 @@ function buildBundledHookEntries(): Record<string, string> {
 }
 
 const bundledHookEntries = buildBundledHookEntries();
+const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/");
+const bundledPluginFile = (pluginId: string, relativePath: string) =>
+  `${bundledPluginRoot(pluginId)}/${relativePath}`;
+const explicitNeverBundleDependencies = [
+  "@lancedb/lancedb",
+  "@larksuiteoapi/node-sdk",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "matrix-js-sdk",
+  "qrcode-terminal",
+].toSorted((left, right) => left.localeCompare(right));
+
+function shouldNeverBundleDependency(id: string): boolean {
+  return explicitNeverBundleDependencies.some((dependency) => {
+    return id === dependency || id.startsWith(`${dependency}/`);
+  });
+}
+
+function listBundledPluginEntrySources(
+  entries: Array<{
+    id: string;
+    sourceEntries: string[];
+  }>,
+): Record<string, string> {
+  return Object.fromEntries(
+    entries.flatMap(({ id, sourceEntries }) =>
+      sourceEntries.map((entry) => {
+        const normalizedEntry = entry.replace(/^\.\//u, "");
+        const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
+        return [
+          entryKey,
+          normalizedEntry ? `extensions/${id}/${normalizedEntry}` : `extensions/${id}`,
+        ];
+      }),
+    ),
+  );
+}
 
 function buildCoreDistEntries(): Record<string, string> {
   return {
@@ -169,25 +293,77 @@ function buildCoreDistEntries(): Record<string, string> {
     entry: "src/entry.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
-    // Ensure memory-cli is a stable entry so the runtime tools plugin can import
-    // it by a deterministic path instead of a content-hashed chunk name.
-    // See https://github.com/openclaw/openclaw/issues/51676
-    "cli/memory-cli": "src/cli/memory-cli.ts",
+    // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
+    // dist/ trees do not strand already-running gateways on stale hashed chunks.
+    "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
+    "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
+    "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
+    "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
+    "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
+    "server-close.runtime": "src/gateway/server-close.runtime.ts",
+    "plugins/memory-state": "src/plugins/memory-state.ts",
+    "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
+    "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
+    "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
+    "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
+    "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
+    "commands/doctor/shared/plugin-registry-migration":
+      "src/commands/doctor/shared/plugin-registry-migration.ts",
+    "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
+    "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
+    "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
+    "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
+    "plugins/loader": "src/plugins/loader.ts",
+    "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
+    "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
-    "telegram/audit": "extensions/telegram/src/audit.ts",
-    "telegram/token": "extensions/telegram/src/token.ts",
+    "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
+    "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
+    "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
+  };
+}
+
+function buildDockerE2eHarnessEntries(): Record<string, string> {
+  return {
+    // Mounted Docker harnesses run against the npm tarball image, so any
+    // internal module they assert must have a stable package dist entry.
+    "agents/pi-bundle-mcp-materialize": "src/agents/pi-bundle-mcp-materialize.ts",
+    "agents/pi-bundle-mcp-runtime": "src/agents/pi-bundle-mcp-runtime.ts",
+    "agents/pi-embedded-runner/effective-tool-policy":
+      "src/agents/pi-embedded-runner/effective-tool-policy.ts",
+    "agents/pi-embedded-runner/run/runtime-context-prompt":
+      "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
+    "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
+    "cli/run-main": "src/cli/run-main.ts",
+    "commitments/runtime": "src/commitments/runtime.ts",
+    "commitments/store": "src/commitments/store.ts",
+    "config/config": "src/config/config.ts",
+    "crestodian/crestodian": "src/crestodian/crestodian.ts",
+    "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
+    "gateway/protocol/index": "src/gateway/protocol/index.ts",
+    "infra/errors": "src/infra/errors.ts",
+    "infra/ws": "src/infra/ws.ts",
+    "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
+    "plugins/tools": "src/plugins/tools.ts",
+    "shared/string-coerce": "src/shared/string-coerce.ts",
   };
 }
 
 const coreDistEntries = buildCoreDistEntries();
+const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
+const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
+  ({ id }) => shouldBuildPrivateQaEntries || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id),
+);
 
 function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
+    ...dockerE2eHarnessEntries,
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     ...Object.fromEntries(
@@ -196,7 +372,13 @@ function buildUnifiedDistEntries(): Record<string, string> {
         source,
       ]),
     ),
-    ...bundledPluginBuildEntries,
+    ...(shouldBuildPrivateQaEntries
+      ? {
+          "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
+          "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
+        }
+      : {}),
+    ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     ...bundledHookEntries,
   };
 }
@@ -205,9 +387,10 @@ export default defineConfig([
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
+    clean: true,
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: ["@lancedb/lancedb"],
+      neverBundle: shouldNeverBundleDependency,
     },
   }),
 ]);
